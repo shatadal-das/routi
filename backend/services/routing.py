@@ -1,7 +1,7 @@
 import os
 import requests
 from urllib.parse import quote
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 def build_google_maps_directions_url(
     start_lat: float,
@@ -9,6 +9,8 @@ def build_google_maps_directions_url(
     places: List[Dict[str, Any]],
     travelmode: str = "driving",
     max_waypoints: int = 9,
+    dest_lat: Optional[float] = None,
+    dest_lng: Optional[float] = None,
 ) -> str:
     """
     Construct a Universal Google Maps Directions URL:
@@ -16,7 +18,9 @@ def build_google_maps_directions_url(
     Handles up to max_waypoints (3 on mobile browser intents, up to 9 on desktop).
     """
     origin = f"{start_lat},{start_lng}"
-    destination = f"{start_lat},{start_lng}"
+    d_lat = dest_lat if dest_lat is not None else start_lat
+    d_lng = dest_lng if dest_lng is not None else start_lng
+    destination = f"{d_lat},{d_lng}"
 
     waypoints = [f"{p['lat']},{p['lng']}" for p in places[:max_waypoints]]
     url = (

@@ -1,0 +1,107 @@
+# End-to-End System Audit & Explainability Layer: RoamAround Engine
+
+This document details the comprehensive end-to-end audit and the newly integrated **Explainability Layer** for the RoamAround route optimization and presentation engine.
+
+---
+
+## 1. Explainability Layer Architecture
+
+The explainability layer exposes clear, human-friendly reasons for optimizer decisions directly to the UI, without exposing raw formulas, internal model weights, or algorithm metrics.
+
+### A. Selected Destination Rationales
+For every stop selected into the tour, the engine outputs concise, user-facing `selection_reasons: List[str]`:
+
+```json
+{
+  "place": "Example Lake & Botanical Park",
+  "selection_reasons": [
+    "Strong match for nature preference",
+    "High place quality score",
+    "Low additional travel time",
+    "Adds category diversity"
+  ]
+}
+```
+
+#### Selection Reason Dimension Mapping:
+1. **Preference Match**:
+   - `"Strong match for nature preference"`
+   - `"Strong match for dining & food preference"`
+   - `"Strong match for art & culture preference"`
+   - `"Strong match for cafe preference"`
+   - `"Strong match for <category> preference"`
+2. **Quality & Popularity**:
+   - `"High place quality score"` (for rating >= 4.5)
+   - `"Popular local highlight"` (for 1000+ reviews)
+   - `"Authentic local hidden gem"` (high quality with local review volumes)
+3. **Route Efficiency**:
+   - `"Low additional travel time"` (transit detour <= 12 mins)
+   - `"Efficient route connection"` (transit detour <= 20 mins)
+   - `"Convenient detour along route"`
+4. **Category Balance**:
+   - `"Adds category diversity"`
+
+---
+
+### B. Candidate Rejection Reasons
+When useful, candidates evaluated but not selected into the final itinerary are exposed in `rejected_destinations` along with concise, human-facing `rejection_reasons: List[str]`:
+
+```json
+[
+  {
+    "place": "Secondary Burger Joint",
+    "category": "restaurant",
+    "rejection_reasons": [
+      "Duplicate category",
+      "Exceeds remaining time"
+    ]
+  },
+  {
+    "place": "Mega Outlet Shopping Center",
+    "category": "shopping",
+    "rejection_reasons": [
+      "Poor preference match"
+    ]
+  },
+  {
+    "place": "Distant Mountain Retreat",
+    "category": "nature",
+    "rejection_reasons": [
+      "Excessive travel time"
+    ]
+  },
+  {
+    "place": "Immense Comprehensive History Museum",
+    "category": "museum",
+    "rejection_reasons": [
+      "Exceeds remaining time"
+    ]
+  }
+]
+```
+
+#### Major Rejection Dimensions Covered:
+- **`Exceeds remaining time`**: Candidate dwell + transit detour exceeds remaining schedule slack or budget.
+- **`Excessive travel time`**: Candidate is situated too far from origin or other stops (excessive transit leg or return journey).
+- **`Duplicate category`**: Category is already saturated in the route (e.g., 2nd restaurant when 1 is already scheduled).
+- **`Poor preference match`**: Candidate interest alignment score is low or category conflicts with user's stated interests (e.g. shopping mall when user asked for nature & viewpoints).
+
+---
+
+## 2. Verification & Automated Tests
+
+A dedicated automated test suite was implemented in [`test_explainability.py`](file:///c:/Users/altaf/Desktop/New%20begining/PROJECT/Routi/backend/services/test_explainability.py):
+
+| Test Case | Description | Result |
+|---|---|:---:|
+| `test_selected_destination_explainability` | Verifies that every selected stop contains non-empty `selection_reasons`, with zero internal formulas or raw floats exposed. | **PASS** |
+| `test_rejection_reasons_coverage` | Exercises all 4 major rejection reasons: `'Exceeds remaining time'`, `'Excessive travel time'`, `'Duplicate category'`, `'Poor preference match'`. | **PASS** |
+| `test_itinerary_generator_explainability_preservation` | Confirms the AI itinerary generation layer preserves `place`, `selection_reasons`, and top-level `rejected_destinations` for UI display. | **PASS** |
+| `test_tools_optimize_trip_explainability` | Verifies the `optimize_trip()` agent tool contract returns the explainability fields. | **PASS** |
+
+### Regression Test Suite Results:
+- **`test_optimizer_review.py`**: All 15 algorithm review test cases **PASSED**.
+- **`test_itinerary_generator.py`**: All 10 requirements and zero-fabrication checks **PASSED**.
+- **`test_agent_modifications.py`**: All 6 conversational modification scenarios **PASSED 100%**.
+- **`test_e2e_audit.py`**: All 5 audit scenarios & 12 verification dimensions **PASSED 100%**.
+- **`test_explainability.py`**: All explainability assertions **PASSED 100%**.

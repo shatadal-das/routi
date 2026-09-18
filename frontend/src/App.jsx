@@ -4,6 +4,7 @@ import { useJsApiLoader } from '@react-google-maps/api';
 import SearchForm from './components/SearchForm';
 import Map from './components/Map';
 import Timeline from './components/Timeline';
+import AgentChat from './components/AgentChat';
 
 const GOOGLE_MAPS_LIBRARIES = [];
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
@@ -76,17 +77,36 @@ function App() {
     setErrorMessage(null);
   };
 
-  const handleGenerateRoute = async ({ lat, lng, hours, address, vibe, vibe_preference, price_level }) => {
+  const handleGenerateRoute = async (formData) => {
     setIsLoading(true);
     setErrorMessage(null);
+
+    const {
+      start_location,
+      lat,
+      lng,
+      hours,
+      available_time_minutes,
+      address,
+      transport_mode,
+      interests,
+      vibe,
+      vibe_preference,
+      price_level,
+    } = formData;
+
     setStartLocation({ lat, lng, address });
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/generate-route`, {
+      const response = await axios.post(`${API_BASE_URL}/api/plan-trip`, {
+        start_location: start_location || { lat, lng, address },
         start_lat: lat,
         start_lng: lng,
         address: address,
+        available_time_minutes: available_time_minutes || Math.round(Number(hours) * 60),
         time_hours: hours,
+        transport_mode: transport_mode || 'DRIVE',
+        interests: interests || (vibe ? [vibe] : []),
         vibe: vibe || vibe_preference,
         vibe_preference: vibe || vibe_preference,
         price_level: price_level,
@@ -207,6 +227,13 @@ function App() {
                 legs={legs}
                 totalTripTime={totalTripTime}
                 googleMapsUrl={routeResult?.google_maps_url}
+                totalTravelMins={routeResult?.total_travel_mins}
+                totalDwellMins={routeResult?.total_dwell_mins}
+                slackRemainingMins={routeResult?.slack_remaining_mins}
+                startClock={routeResult?.start_clock}
+                endClock={routeResult?.end_clock}
+                rejectedDestinations={routeResult?.rejected_destinations}
+                narrative={routeResult?.narrative}
               />
             )}
           </div>
@@ -225,6 +252,19 @@ function App() {
           </div>
         </div>
       </main>
+
+      {/* Interactive AI Concierge Assistant Drawer & Action Buttons */}
+      <AgentChat
+        currentItinerary={routeResult}
+        startLocation={startLocation}
+        onUpdateRoute={(updatedRoute) => {
+          console.log('Active route updated by AI Concierge:', updatedRoute);
+          setRouteResult(updatedRoute);
+          if (updatedRoute?.start_location?.lat && updatedRoute?.start_location?.lng) {
+            setStartLocation(updatedRoute.start_location);
+          }
+        }}
+      />
     </div>
   );
 }

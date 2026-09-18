@@ -10,15 +10,18 @@ load_dotenv()
 # Configure Gemini API
 API_KEY = os.getenv("GEMINI_API_KEY")
 if API_KEY:
-    genai.configure(api_key=API_KEY)
+    try:
+        genai.configure(api_key=API_KEY, transport="rest")
+    except Exception as e:
+        print(f"Warning configuring Gemini in ai_curator.py: {e}")
 
 
 def get_curator_model() -> genai.GenerativeModel:
     """
     Instantiate gemini-3.8-flash model with fallback to other flash models if needed.
     """
-    primary_model = "gemini-3.8-flash"
-    fallback_models = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    primary_model = "gemini-2.5-flash"
+    fallback_models = ["gemini-flash-latest", "gemini-3.8-flash"]
 
     try:
         return genai.GenerativeModel(primary_model)
@@ -99,7 +102,7 @@ You must output a JSON array conforming to this schema:
 ]
 """
 
-    models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+    models_to_try = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.8-flash"]
     curated_data = None
 
     for model_name in models_to_try:

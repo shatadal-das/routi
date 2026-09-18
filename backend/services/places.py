@@ -253,7 +253,7 @@ def fetch_candidate_places(
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.types,places.priceLevel",
+        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.priceLevel",
     }
 
     # 1. If user provided a specific cuisine or keyword vibe, query searchText first
@@ -285,6 +285,7 @@ def fetch_candidate_places(
                         "lat": p["location"]["latitude"],
                         "lng": p["location"]["longitude"],
                         "rating": p.get("rating", 4.2),
+                        "user_rating_count": p.get("userRatingCount", 150),
                         "price_level": PRICE_LEVEL_MAP.get(p.get("priceLevel"), "$$ (Moderate)"),
                         "types": types,
                         "type": "restaurant" if is_food else "attraction",
@@ -329,6 +330,7 @@ def fetch_candidate_places(
                         "lat": p["location"]["latitude"],
                         "lng": p["location"]["longitude"],
                         "rating": p.get("rating", 4.3),
+                        "user_rating_count": p.get("userRatingCount", 150),
                         "price_level": PRICE_LEVEL_MAP.get(p.get("priceLevel"), "$$ (Moderate)"),
                         "types": types,
                         "type": "restaurant" if is_food else "attraction",

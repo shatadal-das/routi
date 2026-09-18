@@ -12,6 +12,8 @@ export default function SearchForm({
   const [address, setAddress] = useState('');
   const [coords, setCoords] = useState({ lat: null, lng: null });
   const [timeHours, setTimeHours] = useState(4.5);
+  const [transportMode, setTransportMode] = useState('DRIVE');
+  const [selectedInterests, setSelectedInterests] = useState([]);
   const [vibe, setVibe] = useState('');
   const [priceLevel, setPriceLevel] = useState('$$');
   const [formError, setFormError] = useState('');
@@ -106,21 +108,35 @@ export default function SearchForm({
       setFormError('Please select a departure location or choose a featured city.');
       return;
     }
-    if (timeHours < 2.0) {
-      setFormError('Please select at least 2.0 hours for an itinerary.');
+    if (timeHours < 1.0) {
+      setFormError('Please select at least 1.0 hour for an itinerary.');
       return;
     }
     setFormError('');
     setShowSuggestions(false);
 
+    const combinedInterests = [...selectedInterests];
+    if (vibe.trim() && !combinedInterests.includes(vibe.trim())) {
+      combinedInterests.push(vibe.trim());
+    }
+
     if (onSubmit) {
       onSubmit({
+        start_location: {
+          lat: coords.lat,
+          lng: coords.lng,
+          address: address.trim(),
+        },
         lat: coords.lat,
         lng: coords.lng,
         hours: Number(timeHours),
+        available_time_minutes: Math.round(Number(timeHours) * 60),
+        transport_mode: transportMode,
+        transportation_mode: transportMode,
         address: address.trim(),
-        vibe: vibe.trim() || undefined,
-        vibe_preference: vibe.trim() || undefined,
+        interests: combinedInterests,
+        vibe: combinedInterests.join(', ') || undefined,
+        vibe_preference: combinedInterests.join(', ') || undefined,
         price_level: priceLevel || undefined,
       });
     }
@@ -264,25 +280,63 @@ export default function SearchForm({
             />
           </div>
 
-          {/* Quick Vibe Suggestions */}
+          {/* Quick Interest Filter Chips */}
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
             {[
-              'Relaxed waterfront walk & spicy food',
-              'Scenic viewpoints & artisan coffee',
-              'Art galleries & quiet cafes',
-              'Local street food & markets'
-            ].map((chip) => (
+              { id: 'nature', label: '🌲 Nature & Parks' },
+              { id: 'cafe', label: '☕ Cafes & Coffee' },
+              { id: 'food', label: '🍽️ Dining & Food' },
+              { id: 'culture', label: '🏛️ Art & Culture' },
+              { id: 'viewpoint', label: '🌄 Scenic Views' },
+              { id: 'waterfront', label: '🌊 Waterfront' }
+            ].map((chip) => {
+              const isSelected = selectedInterests.includes(chip.id);
+              return (
+                <button
+                  key={chip.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedInterests((prev) =>
+                      isSelected ? prev.filter((i) => i !== chip.id) : [...prev, chip.id]
+                    );
+                  }}
+                  className={`text-[11px] font-medium px-3 py-1 rounded-xl transition cursor-pointer ${
+                    isSelected
+                      ? 'bg-indigo-500/25 text-indigo-200 border border-indigo-500/60 shadow-sm'
+                      : 'bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700/50'
+                  }`}
+                >
+                  {chip.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Transportation Mode */}
+        <div>
+          <label className="text-xs font-bold text-slate-200 tracking-wide uppercase block mb-2">
+            Transportation Mode
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { id: 'DRIVE', icon: '🚗', label: 'Driving', desc: 'Standard road trip' },
+              { id: 'WALK', icon: '🚶', label: 'Walking', desc: 'Compact neighborhood' },
+              { id: 'BICYCLE', icon: '🚲', label: 'Biking', desc: 'Active cycling loop' },
+            ].map((mode) => (
               <button
-                key={chip}
+                key={mode.id}
                 type="button"
-                onClick={() => setVibe(chip)}
-                className={`text-[11px] font-medium px-3 py-1 rounded-xl transition cursor-pointer ${
-                  vibe === chip
-                    ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 shadow-sm'
-                    : 'bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700/50'
+                onClick={() => setTransportMode(mode.id)}
+                className={`p-2.5 rounded-2xl border text-center transition cursor-pointer ${
+                  transportMode === mode.id
+                    ? 'bg-indigo-950/70 border-indigo-500/80 text-white shadow-md'
+                    : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300'
                 }`}
               >
-                {chip}
+                <span className="text-base block mb-0.5">{mode.icon}</span>
+                <span className="text-xs font-bold block">{mode.label}</span>
+                <span className="text-[10px] text-slate-500 block truncate">{mode.desc}</span>
               </button>
             ))}
           </div>
