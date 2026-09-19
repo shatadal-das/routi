@@ -16,6 +16,10 @@ export default function SearchForm({
   const [selectedInterests, setSelectedInterests] = useState([]);
   const [vibe, setVibe] = useState('');
   const [priceLevel, setPriceLevel] = useState('$$');
+  const [startHour, setStartHour] = useState('');
+  const [startMinute, setStartMinute] = useState('');
+  const [startPeriod, setStartPeriod] = useState('AM');
+  const [timeSelectedExplicitly, setTimeSelectedExplicitly] = useState(false);
   const [formError, setFormError] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -102,6 +106,35 @@ export default function SearchForm({
     return `${h}h ${m}m`;
   };
 
+  const getFormattedStartTime = () => {
+    if (!startHour || !startMinute) return '';
+    return `${startHour.padStart(2, '0')}:${startMinute.padStart(2, '0')} ${startPeriod}`;
+  };
+
+  const get24HourStartTime = () => {
+    if (!startHour || !startMinute) return '';
+    let h = parseInt(startHour, 10);
+    const m = parseInt(startMinute, 10);
+    if (startPeriod === 'PM' && h !== 12) h += 12;
+    if (startPeriod === 'AM' && h === 12) h = 0;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  };
+
+  const calculateExpectedReturnClock = (hStr, mStr, periodStr, hoursDuration) => {
+    if (!hStr || !mStr) return 'Select start time';
+    let h = parseInt(hStr, 10);
+    const m = parseInt(mStr, 10);
+    if (periodStr === 'PM' && h !== 12) h += 12;
+    if (periodStr === 'AM' && h === 12) h = 0;
+    const totalStartMins = h * 60 + m;
+    const totalEndMins = (totalStartMins + Math.round(hoursDuration * 60)) % 1440;
+    const endH = Math.floor(totalEndMins / 60);
+    const endM = totalEndMins % 60;
+    const endPeriod = endH >= 12 ? 'PM' : 'AM';
+    const displayH = endH % 12 === 0 ? 12 : endH % 12;
+    return `${String(displayH).padStart(2, '0')}:${String(endM).padStart(2, '0')} ${endPeriod}`;
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!address.trim() && coords.lat === null) {
@@ -110,6 +143,10 @@ export default function SearchForm({
     }
     if (timeHours < 1.0) {
       setFormError('Please select at least 1.0 hour for an itinerary.');
+      return;
+    }
+    if (!startHour || !startMinute || !timeSelectedExplicitly) {
+      setFormError('Start Time must be explicitly selected. Please select your trip Start Time (Hour, Minute, and AM/PM) or click a quick preset.');
       return;
     }
     setFormError('');
@@ -131,6 +168,9 @@ export default function SearchForm({
         lng: coords.lng,
         hours: Number(timeHours),
         available_time_minutes: Math.round(Number(timeHours) * 60),
+        start_time: getFormattedStartTime(),
+        start_time_clock: getFormattedStartTime(),
+        start_time_24h: get24HourStartTime(),
         transport_mode: transportMode,
         transportation_mode: transportMode,
         address: address.trim(),
@@ -367,6 +407,172 @@ export default function SearchForm({
                 <span className="text-[10px] text-slate-500 block truncate">{tier.desc}</span>
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* Explicit Departure Time Input: Hour, Minute, AM/PM */}
+        <div>
+          <div className="flex justify-between items-center mb-2">
+            <div>
+              <label htmlFor="start-time-hour" className="text-xs font-bold text-slate-200 tracking-wide uppercase block">
+                Start Time
+              </label>
+              <span className="text-[11px] text-slate-400">
+                Paces meal windows & departure/return schedule
+              </span>
+            </div>
+            {getFormattedStartTime() ? (
+              <div className="px-3 py-1 bg-indigo-950/70 border border-indigo-500/40 rounded-xl text-xs font-bold text-indigo-300 flex items-center space-x-1.5">
+                <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>🕐 {getFormattedStartTime()}</span>
+              </div>
+            ) : (
+              <div className="px-2.5 py-1 bg-amber-500/15 border border-amber-500/40 rounded-xl text-xs font-semibold text-amber-300 flex items-center space-x-1">
+                <span>⚠️ Required: Select Time</span>
+              </div>
+            )}
+          </div>
+
+          {/* 3-Part Time Selector: Hour, Minute, AM/PM */}
+          <div className="grid grid-cols-12 gap-2">
+            {/* Hour Select */}
+            <div className="col-span-5">
+              <label htmlFor="start-time-hour" className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
+                Hour
+              </label>
+              <select
+                id="start-time-hour"
+                value={startHour}
+                onChange={(e) => {
+                  setStartHour(e.target.value);
+                  if (e.target.value && startMinute) {
+                    setTimeSelectedExplicitly(true);
+                  }
+                }}
+                className={`w-full px-3 py-2.5 bg-slate-950/90 border rounded-2xl font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/80 cursor-pointer ${
+                  !startHour ? 'border-amber-500/60 text-amber-200/80' : 'border-slate-700/80 text-slate-100'
+                }`}
+              >
+                <option value="" disabled className="bg-slate-900 text-slate-400">
+                  -- Hour --
+                </option>
+                {['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'].map((hr) => (
+                  <option key={hr} value={hr} className="bg-slate-900 text-white font-medium">
+                    {hr}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Minute Select */}
+            <div className="col-span-4">
+              <label htmlFor="start-time-minute" className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
+                Minute
+              </label>
+              <select
+                id="start-time-minute"
+                value={startMinute}
+                onChange={(e) => {
+                  setStartMinute(e.target.value);
+                  if (startHour && e.target.value) {
+                    setTimeSelectedExplicitly(true);
+                  }
+                }}
+                className={`w-full px-3 py-2.5 bg-slate-950/90 border rounded-2xl font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/80 cursor-pointer ${
+                  !startMinute ? 'border-amber-500/60 text-amber-200/80' : 'border-slate-700/80 text-slate-100'
+                }`}
+              >
+                <option value="" disabled className="bg-slate-900 text-slate-400">
+                  -- Min --
+                </option>
+                {['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'].map((mn) => (
+                  <option key={mn} value={mn} className="bg-slate-900 text-white font-medium">
+                    :{mn}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* AM / PM Toggle */}
+            <div className="col-span-3">
+              <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
+                Period
+              </label>
+              <div className="grid grid-cols-2 gap-1 bg-slate-950/90 border border-slate-700/80 rounded-2xl p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStartPeriod('AM');
+                    setTimeSelectedExplicitly(true);
+                  }}
+                  className={`py-1.5 text-xs font-bold rounded-xl transition cursor-pointer ${
+                    startPeriod === 'AM'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  AM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStartPeriod('PM');
+                    setTimeSelectedExplicitly(true);
+                  }}
+                  className={`py-1.5 text-xs font-bold rounded-xl transition cursor-pointer ${
+                    startPeriod === 'PM'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  PM
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Preset Buttons (including user test cases: 09:00 AM, 12:00 PM, 05:30 PM) */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] text-slate-500 uppercase font-bold mr-1">Presets:</span>
+            {[
+              { label: '09:00 AM', h: '09', m: '00', p: 'AM' },
+              { label: '09:30 AM', h: '09', m: '30', p: 'AM' },
+              { label: '12:00 PM', h: '12', m: '00', p: 'PM' },
+              { label: '05:30 PM', h: '05', m: '30', p: 'PM' },
+            ].map((preset) => {
+              const isActive = startHour === preset.h && startMinute === preset.m && startPeriod === preset.p;
+              return (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => {
+                    setStartHour(preset.h);
+                    setStartMinute(preset.m);
+                    setStartPeriod(preset.p);
+                    setTimeSelectedExplicitly(true);
+                  }}
+                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-xl transition cursor-pointer ${
+                    isActive
+                      ? 'bg-indigo-500/30 text-indigo-200 border border-indigo-500/60 shadow-sm'
+                      : 'bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700/50'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Dynamic Schedule Preview Badge */}
+          <div className="mt-2 p-2 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] text-slate-400 flex items-center justify-between">
+            <span>
+              Expected Return: <strong className="text-indigo-300 font-semibold">{calculateExpectedReturnClock(startHour, startMinute, startPeriod, timeHours)}</strong>
+            </span>
+            <span className="text-slate-500">
+              ({formatHoursDisplay(timeHours)} duration)
+            </span>
           </div>
         </div>
 

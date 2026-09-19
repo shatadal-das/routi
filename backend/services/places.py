@@ -221,6 +221,32 @@ def fetch_places(
     return places
 
 
+
+def classify_place_category(types: List[str], name: str = "") -> tuple:
+    """
+    Returns (category, venue_type) ensuring cafes/bakeries are distinguished
+    from full sit-down dining restaurants.
+    """
+    tl = [str(t).lower() for t in types]
+    nl = str(name).lower()
+
+    if any(t in tl for t in ["bakery", "cafe", "coffee_shop"]) or "coffee" in nl or "cafe" in nl or "bakery" in nl:
+        return "cafe", "cafe"
+    if any(t in tl for t in ["restaurant", "meal_takeaway", "meal_delivery"]) or "restaurant" in nl or "diner" in nl or "bistro" in nl:
+        return "restaurant", "restaurant"
+    if any(t in tl for t in ["bar", "pub", "night_club"]):
+        return "bar", "bar"
+    if any(t in tl for t in ["park", "campground", "national_park", "garden"]) or "park" in nl or "garden" in nl:
+        return "park", "park"
+    if any(t in tl for t in ["museum", "art_gallery"]) or "museum" in nl or "gallery" in nl:
+        return "museum", "museum"
+    if any(t in tl for t in ["viewpoint", "scenic_point"]) or "view" in nl or "overlook" in nl:
+        return "viewpoint", "viewpoint"
+    if any(t in tl for t in ["monument", "historical_landmark"]) or any(k in nl for k in ["fort", "palace", "monument", "tomb", "temple", "gate"]):
+        return "monument", "monument"
+    return "attraction", "attraction"
+
+
 PRICE_LEVEL_MAP = {
     "PRICE_LEVEL_FREE": "Free",
     "PRICE_LEVEL_INEXPENSIVE": "$ (Budget-Friendly)",
@@ -278,17 +304,19 @@ def fetch_candidate_places(
                 if pid and pid not in seen_place_ids and "location" in p:
                     seen_place_ids.add(pid)
                     types = p.get("types", [])
-                    is_food = any(t in types for t in ["restaurant", "cafe", "bakery", "bar", "food"])
+                    name_text = p.get("displayName", {}).get("text", "Local Venue")
+                    cat, v_type = classify_place_category(types, name_text)
                     candidates.append({
                         "place_id": pid,
-                        "name": p.get("displayName", {}).get("text", "Local Venue"),
+                        "name": name_text,
                         "lat": p["location"]["latitude"],
                         "lng": p["location"]["longitude"],
                         "rating": p.get("rating", 4.2),
                         "user_rating_count": p.get("userRatingCount", 150),
                         "price_level": PRICE_LEVEL_MAP.get(p.get("priceLevel"), "$$ (Moderate)"),
                         "types": types,
-                        "type": "restaurant" if is_food else "attraction",
+                        "category": cat,
+                        "type": "restaurant" if cat == "restaurant" else ("cafe" if cat == "cafe" else "attraction"),
                         "address": p.get("formattedAddress", "")
                     })
         except Exception as e:
@@ -323,17 +351,19 @@ def fetch_candidate_places(
                 if pid and pid not in seen_place_ids and "location" in p:
                     seen_place_ids.add(pid)
                     types = p.get("types", [])
-                    is_food = any(t in types for t in ["restaurant", "cafe", "bakery", "bar", "food"])
+                    name_text = p.get("displayName", {}).get("text", "Local Attraction")
+                    cat, v_type = classify_place_category(types, name_text)
                     candidates.append({
                         "place_id": pid,
-                        "name": p.get("displayName", {}).get("text", "Local Attraction"),
+                        "name": name_text,
                         "lat": p["location"]["latitude"],
                         "lng": p["location"]["longitude"],
                         "rating": p.get("rating", 4.3),
                         "user_rating_count": p.get("userRatingCount", 150),
                         "price_level": PRICE_LEVEL_MAP.get(p.get("priceLevel"), "$$ (Moderate)"),
                         "types": types,
-                        "type": "restaurant" if is_food else "attraction",
+                        "category": cat,
+                        "type": "restaurant" if cat == "restaurant" else ("cafe" if cat == "cafe" else "attraction"),
                         "address": p.get("formattedAddress", "")
                     })
         except Exception as e:

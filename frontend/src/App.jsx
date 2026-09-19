@@ -93,6 +93,7 @@ function App() {
       vibe,
       vibe_preference,
       price_level,
+      start_time,
     } = formData;
 
     setStartLocation({ lat, lng, address });
@@ -103,6 +104,8 @@ function App() {
         start_lat: lat,
         start_lng: lng,
         address: address,
+        start_time: start_time || '09:30 AM',
+        start_time_clock: start_time || '09:30 AM',
         available_time_minutes: available_time_minutes || Math.round(Number(hours) * 60),
         time_hours: hours,
         transport_mode: transport_mode || 'DRIVE',
@@ -226,10 +229,12 @@ function App() {
                 places={places}
                 legs={legs}
                 totalTripTime={totalTripTime}
+                totalDurationMins={routeResult?.total_duration_minutes ?? routeResult?.total_trip_mins ?? 0}
                 googleMapsUrl={routeResult?.google_maps_url}
-                totalTravelMins={routeResult?.total_travel_mins}
-                totalDwellMins={routeResult?.total_dwell_mins}
+                totalTravelMins={routeResult?.travel_time_minutes ?? routeResult?.total_travel_mins ?? 0}
+                totalDwellMins={routeResult?.visit_time_minutes ?? routeResult?.total_dwell_mins ?? 0}
                 slackRemainingMins={routeResult?.slack_remaining_mins}
+                safetyBufferMins={routeResult?.safety_buffer_minutes ?? routeResult?.safety_buffer_mins ?? routeResult?.safety_buffer ?? 0}
                 startClock={routeResult?.start_clock}
                 endClock={routeResult?.end_clock}
                 rejectedDestinations={routeResult?.rejected_destinations}

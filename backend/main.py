@@ -11,6 +11,7 @@ from services.ai_curator import curate_itinerary
 from services.routing import get_optimized_route, build_google_maps_directions_url
 from services.geocoding import geocode_location, search_place_suggestions
 from services.agent import RoamAroundAgent
+from services.optimizer import calculate_safety_buffer_mins, determine_visit_duration_mins
 
 load_dotenv()
 
@@ -26,12 +27,34 @@ app.add_middleware(
 )
 roam_agent = RoamAroundAgent()
 
+from datetime import datetime
+
+def normalize_time_str(val: Optional[str]) -> str:
+    """Normalize user or API start time into standard '%I:%M %p' format (e.g. '09:30 AM')."""
+    if not val or not isinstance(val, str) or not val.strip():
+        return "09:30 AM"
+    cleaned = val.strip().upper()
+    formats = ["%I:%M %p", "%I:%M%p", "%H:%M", "%H:%M:%S"]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(cleaned, fmt)
+            return dt.strftime("%I:%M %p")
+        except ValueError:
+            continue
+    return "09:30 AM"
+
+
 class RouteRequest(BaseModel):
     # Support both object and flattened coordinates
     start_location: Optional[dict] = None
     start_lat: Optional[float] = None
     start_lng: Optional[float] = None
     address: Optional[str] = None
+
+    # Support explicit departure / start time
+    start_time: Optional[str] = None
+    start_time_clock: Optional[str] = None
+    start_time_24h: Optional[str] = None
 
     # Support both minutes and hours
     available_time_minutes: Optional[int] = None
@@ -48,6 +71,10 @@ class RouteRequest(BaseModel):
 
     cuisine: Optional[str] = None
     price_level: Optional[str] = None
+
+    # Support explicit categories & iconic landmark policy
+    selected_categories: Optional[list] = None
+    allow_iconic_landmarks: Optional[bool] = False
 
 
 @app.get("/api/health")
@@ -213,24 +240,44 @@ def process_trip_planning(request: RouteRequest):
     if mode not in ["DRIVE", "WALK", "BICYCLE"]:
         mode = "DRIVE"
 
-    # 4. Parse interests / vibe
+    # 4. Parse interests / vibe and hard category constraints
     if request.interests and isinstance(request.interests, list):
         vibe_query = ", ".join([str(i) for i in request.interests if i]).strip() or None
     else:
         vibe_query = (request.vibe or request.vibe_preference or "").strip() or None
 
+    explicit_cats = request.selected_categories
+    if not explicit_cats and request.interests and isinstance(request.interests, list):
+        from services.taxonomy import normalize_category
+        rec = [i for i in request.interests if normalize_category(str(i))]
+        if rec:
+            explicit_cats = rec
+
+    allow_landmarks = bool(request.allow_iconic_landmarks)
+
     cuisine = request.cuisine or None
     price_level = request.price_level or "Moderate"
 
     # 5. Fetch candidate places
+    # Dynamic candidate radius and count based on available time
+    if hours >= 8.0:
+        cand_radius = 10000.0 if mode == "DRIVE" else 4500.0
+        cand_count = 35
+    elif hours >= 5.0:
+        cand_radius = 7000.0 if mode == "DRIVE" else 3500.0
+        cand_count = 25
+    else:
+        cand_radius = 5000.0 if mode == "DRIVE" else 2500.0
+        cand_count = 20
+
     try:
         candidate_places = fetch_candidate_places(
             lat=lat,
             lng=lng,
-            radius=5000.0 if mode == "DRIVE" else 2500.0,
+            radius=cand_radius,
             cuisine=cuisine,
             vibe=vibe_query,
-            max_candidates=20
+            max_candidates=cand_count
         )
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -245,6 +292,7 @@ def process_trip_planning(request: RouteRequest):
 
     # 6. Run RoamAround AI Concierge Agent & Algorithmic Optimizer
     try:
+        start_clock_str = normalize_time_str(request.start_time or request.start_time_clock or request.start_time_24h)
         agent_plan = roam_agent.plan_itinerary(
             origin_lat=lat,
             origin_lng=lng,
@@ -255,7 +303,9 @@ def process_trip_planning(request: RouteRequest):
             cuisine_preference=cuisine,
             price_level=price_level,
             travel_mode=mode,
-            start_time_clock="09:30 AM"
+            start_time_clock=start_clock_str,
+            selected_categories=explicit_cats,
+            allow_iconic_landmarks=allow_landmarks
         )
         selected_places = agent_plan.get("optimized_places", [])
         curator_model = agent_plan.get("curator_model", "gemini-2.5-flash")
@@ -274,8 +324,9 @@ def process_trip_planning(request: RouteRequest):
             pid = item.get("place_id")
             if pid in candidate_map:
                 place = dict(candidate_map[pid])
-                duration_mins = int(item.get("duration_mins") or 60)
+                duration_mins = int(item.get("duration_mins") or determine_visit_duration_mins(place))
                 place["duration_mins"] = duration_mins
+                place["visit_duration"] = duration_mins
                 place["duration_hours"] = round(duration_mins / 60.0, 2)
                 place["time_estimate_reason"] = item.get("time_estimate_reason", f"AI estimated {duration_mins} mins.")
                 place["ai_reasoning"] = item.get("ai_reasoning", "Curated for your day trip.")
@@ -286,8 +337,10 @@ def process_trip_planning(request: RouteRequest):
     if not selected_places:
         selected_places = candidate_places[:min(3, len(candidate_places))]
         for p in selected_places:
-            p["duration_mins"] = 60
-            p["duration_hours"] = 1.0
+            dur = determine_visit_duration_mins(p)
+            p["duration_mins"] = dur
+            p["visit_duration"] = dur
+            p["duration_hours"] = round(dur / 60.0, 2)
             p["time_estimate_reason"] = "Standard 60 mins recommended visit duration."
             p["ai_reasoning"] = "Curated highlight for your itinerary."
 
@@ -296,7 +349,8 @@ def process_trip_planning(request: RouteRequest):
         route_result = get_optimized_route(
             start_lat=lat,
             start_lng=lng,
-            places=selected_places
+            places=selected_places,
+            optimize_waypoints=False
         )
     except Exception as e:
         print(f"Routing API exception ({e}), falling back to direct sequencing")
@@ -320,15 +374,19 @@ def process_trip_planning(request: RouteRequest):
     for p in optimized_places:
         pid = p.get("place_id")
         extra = agent_map.get(pid, {})
-        d_mins = p.get("duration_mins", extra.get("duration_mins", 60))
+        v_mins = p.get("visit_duration", extra.get("visit_duration", p.get("duration_mins", extra.get("duration_mins", 60))))
+        t_prev = p.get("travel_time_from_previous", extra.get("travel_time_from_previous", extra.get("transit_from_prev_mins", 0)))
         formatted_places.append({
             "place_id": p.get("place_id"),
             "name": p.get("name"),
             "coordinates": {"lat": p.get("lat"), "lng": p.get("lng")},
             "lat": p.get("lat"),
             "lng": p.get("lng"),
-            "duration_mins": d_mins,
-            "duration_hours": p.get("duration_hours", extra.get("duration_hours", round(d_mins / 60.0, 2))),
+            "duration_mins": v_mins,
+            "duration_hours": p.get("duration_hours", extra.get("duration_hours", round(v_mins / 60.0, 2))),
+            "visit_duration": v_mins,
+            "travel_time_from_previous": t_prev,
+            "transit_from_prev_mins": t_prev,
             "time_estimate_reason": p.get("time_estimate_reason", extra.get("time_estimate_reason", "")),
             "type": p.get("type", extra.get("type", "attraction")),
             "cuisine": p.get("cuisine", extra.get("cuisine")),
@@ -339,6 +397,8 @@ def process_trip_planning(request: RouteRequest):
             "arrival_time": extra.get("arrival_time", ""),
             "departure_time": extra.get("departure_time", ""),
             "category": extra.get("category", p.get("type", "attraction")),
+            "meal_type": extra.get("meal_type") or p.get("meal_type"),
+            "is_meal_stop": bool(extra.get("meal_type") or p.get("meal_type")),
             "selection_reasons": extra.get("selection_reasons", []),
             "score_breakdown": extra.get("score_breakdown", {})
         })
@@ -346,9 +406,12 @@ def process_trip_planning(request: RouteRequest):
     agent_data = agent_plan if "agent_plan" in locals() and isinstance(agent_plan, dict) else {}
     total_travel = agent_data.get("total_travel_mins", 0)
     total_dwell = agent_data.get("total_dwell_mins", 0)
-    total_duration = agent_data.get("total_trip_mins", int(round(total_trip_hours * 60)))
+    safety_buffer = agent_data.get("safety_buffer_minutes") or agent_data.get("safety_buffer_mins") or calculate_safety_buffer_mins(total_travel)
+    total_duration = agent_data.get("total_trip_mins", total_travel + total_dwell)
+    total_duration_with_buffer = total_travel + total_dwell + safety_buffer
+    available_time_mins = int(round(total_trip_hours * 60))
     total_dist = agent_data.get("total_distance_km", 0.0)
-    start_clock = agent_data.get("start_clock", "09:30 AM")
+    start_clock = agent_data.get("start_clock", start_clock_str if "start_clock_str" in locals() else "09:30 AM")
     end_clock = agent_data.get("end_clock", "")
     rejected_destinations = agent_data.get("rejected_destinations", [])
 
@@ -358,12 +421,16 @@ def process_trip_planning(request: RouteRequest):
             "id": p["place_id"],
             "name": p["name"],
             "category": p["category"],
+            "meal_type": p.get("meal_type"),
+            "is_meal_stop": bool(p.get("meal_type")),
             "rating": p.get("rating"),
             "lat": p["lat"],
             "lng": p["lng"],
             "arrival_time": p["arrival_time"],
             "departure_time": p["departure_time"],
-            "visit_duration_minutes": p["duration_mins"],
+            "visit_duration": p.get("visit_duration", p["duration_mins"]),
+            "visit_duration_minutes": p.get("visit_duration", p["duration_mins"]),
+            "travel_time_from_previous": p.get("travel_time_from_previous", 0),
             "selection_reasons": p.get("selection_reasons", []),
             "reason": p.get("ai_reasoning", ""),
             "address": p.get("address", "")
@@ -374,9 +441,12 @@ def process_trip_planning(request: RouteRequest):
     route_coords = [{"lat": lat, "lng": lng}] + [{"lat": p["lat"], "lng": p["lng"]} for p in formatted_places] + [{"lat": lat, "lng": lng}]
 
     trip_contract = {
-        "total_duration_minutes": total_duration,
+        "total_duration_minutes": total_duration_with_buffer,
         "travel_time_minutes": total_travel,
         "visit_time_minutes": total_dwell,
+        "safety_buffer_minutes": safety_buffer,
+        "safety_buffer": safety_buffer,
+        "available_time_minutes": available_time_mins,
         "distance_km": total_dist,
         "transport_mode": mode,
         "start_clock": start_clock,
@@ -411,9 +481,16 @@ def process_trip_planning(request: RouteRequest):
         "optimized_places": formatted_places,
         "total_trip_time": f"{total_trip_hours} hours",
         "total_trip_hours": total_trip_hours,
+        "travel_time_minutes": total_travel,
+        "visit_time_minutes": total_dwell,
+        "safety_buffer_minutes": safety_buffer,
+        "safety_buffer": safety_buffer,
+        "safety_buffer_mins": safety_buffer,
+        "total_duration_minutes": total_duration_with_buffer,
+        "available_time_minutes": available_time_mins,
         "total_travel_mins": total_travel,
         "total_dwell_mins": total_dwell,
-        "slack_remaining_mins": agent_data.get("slack_remaining_mins", 0),
+        "slack_remaining_mins": agent_data.get("slack_remaining_mins", max(0, available_time_mins - total_duration_with_buffer)),
         "start_clock": start_clock,
         "end_clock": end_clock,
         "rejected_destinations": rejected_destinations,

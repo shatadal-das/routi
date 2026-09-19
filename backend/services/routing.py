@@ -36,7 +36,7 @@ def build_google_maps_directions_url(
 
     return url
 
-def get_optimized_route(start_lat: float, start_lng: float, places: List[Dict[str, Any]]) -> Dict[str, Any]:
+def get_optimized_route(start_lat: float, start_lng: float, places: List[Dict[str, Any]], optimize_waypoints: bool = False) -> Dict[str, Any]:
     """
     Call Google Routes API (or Directions API) with origin/destination at start coordinates
     and optimizeWaypointOrder: true. Generates universal Google Maps directions URL.
@@ -87,7 +87,7 @@ def get_optimized_route(start_lat: float, start_lng: float, places: List[Dict[st
         },
         "intermediates": intermediates,
         "travelMode": "DRIVE",
-        "optimizeWaypointOrder": "true"
+        "optimizeWaypointOrder": "true" if optimize_waypoints else "false"
     }
 
     try:
@@ -99,12 +99,14 @@ def get_optimized_route(start_lat: float, start_lng: float, places: List[Dict[st
             polyline_points = route.get("polyline", {}).get("encodedPolyline", "")
 
             # waypoint order: index permutation of intermediates
-            waypoint_order = route.get("optimizedIntermediateWaypointIndex")
-            if waypoint_order is None or len(waypoint_order) != len(places):
+            if optimize_waypoints:
+                waypoint_order = route.get("optimizedIntermediateWaypointIndex")
+                if waypoint_order is None or len(waypoint_order) != len(places):
+                    waypoint_order = list(range(len(places)))
+                optimized_places = [places[i] for i in waypoint_order if i < len(places)]
+            else:
                 waypoint_order = list(range(len(places)))
-
-            # Reorder places according to Google's optimized order
-            optimized_places = [places[i] for i in waypoint_order if i < len(places)]
+                optimized_places = list(places)
 
             legs_data = []
             total_duration_sec = 0
@@ -158,7 +160,8 @@ def get_optimized_route(start_lat: float, start_lng: float, places: List[Dict[st
 
     # 2. Secondary fallback: Google Directions API (legacy)
     directions_url = "https://maps.googleapis.com/maps/api/directions/json"
-    waypoints_str = "optimize:true|" + "|".join([f"{p['lat']},{p['lng']}" for p in places])
+    wp_prefix = "optimize:true|" if optimize_waypoints else ""
+    waypoints_str = wp_prefix + "|".join([f"{p['lat']},{p['lng']}" for p in places])
     params = {
         "origin": f"{start_lat},{start_lng}",
         "destination": f"{start_lat},{start_lng}",
@@ -173,7 +176,12 @@ def get_optimized_route(start_lat: float, start_lng: float, places: List[Dict[st
 
         if data.get("status") == "OK" and data.get("routes"):
             route = data["routes"][0]
-            waypoint_order = route.get("waypoint_order", list(range(len(places))))
+            if optimize_waypoints:
+                waypoint_order = route.get("waypoint_order", list(range(len(places))))
+                optimized_places = [places[i] for i in waypoint_order if i < len(places)]
+            else:
+                waypoint_order = list(range(len(places)))
+                optimized_places = list(places)
             polyline_points = route.get("overview_polyline", {}).get("points", "")
 
             legs_data = []

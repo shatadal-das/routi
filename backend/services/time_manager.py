@@ -1,21 +1,21 @@
 def calculate_activities(time_hours: float) -> dict:
     """
-    Calculate how many activities fit into the user's available time.
-    Assumptions:
-    - Base driving buffer = 1.0 hour
-    - Dinner = 1.5 hours
-    - 1 Attraction = 1.0 hour
+    Calculate realistic activity pacing for the user's available time.
+    Uses a proportional, rational safety buffer (10-15 mins) rather than
+    excessively consuming user exploration time.
     """
-    buffer_hours = 1.0
-    dinner_hours = 1.5
-    attraction_duration = 1.0
+    hrs = max(0.75, float(time_hours))
+    # Proportional, modest buffer: 10-15 minutes max
+    buffer_hours = min(0.25, round(hrs * 0.08, 2))
+    dinner_hours = 1.25  # Standard 75 mins meal
+    attraction_duration = 1.0  # 60 mins typical attraction
 
-    available_time = max(0.0, float(time_hours) - buffer_hours)
+    available_time = max(0.5, hrs - buffer_hours)
 
-    if available_time >= dinner_hours:
+    if available_time >= 3.0:
         has_dinner = True
-        remaining_time = available_time - dinner_hours
-        num_attractions = int(remaining_time // attraction_duration)
+        remaining_time = max(0.0, available_time - dinner_hours)
+        num_attractions = max(1, int(remaining_time // attraction_duration))
     else:
         has_dinner = False
         num_attractions = max(1, int(available_time // attraction_duration))

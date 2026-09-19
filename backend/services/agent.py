@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 
 from services.scorer import score_and_rank_candidates, ScoringConfig
-from services.optimizer import optimize_day_itinerary, OptimizedItineraryPlan
+from services.optimizer import optimize_day_itinerary, OptimizedItineraryPlan, calculate_safety_buffer_mins
 from services.itinerary_generator import generate_user_friendly_itinerary
 from services.tools import search_places, get_place_details, get_route, optimize_trip, geocode_location
 
@@ -64,7 +64,9 @@ class RoamAroundAgent:
         cuisine_preference: Optional[str] = None,
         price_level: Optional[str] = None,
         travel_mode: str = "DRIVE",
-        start_time_clock: str = "09:30 AM"
+        start_time_clock: str = "09:30 AM",
+        selected_categories: Optional[List[str]] = None,
+        allow_iconic_landmarks: bool = False
     ) -> Dict[str, Any]:
         """
         Executes the agentic workflow:
@@ -82,7 +84,9 @@ class RoamAroundAgent:
             user_vibe=user_vibe,
             cuisine_preference=cuisine_preference,
             travel_mode=travel_mode,
-            start_time_clock=start_time_clock
+            start_time_clock=start_time_clock,
+            selected_categories=selected_categories,
+            allow_iconic_landmarks=allow_iconic_landmarks
         )
 
         # Step 2: Generative narrative synthesis using Gemini
@@ -101,6 +105,8 @@ class RoamAroundAgent:
             ai_reason = refinement.get("ai_reasoning") or stop.ai_reasoning
             time_reason = refinement.get("time_estimate_reason") or stop.time_estimate_reason
 
+            v_dur = getattr(stop, "visit_duration", stop.duration_mins)
+            t_prev = getattr(stop, "travel_time_from_previous", getattr(stop, "transit_from_prev_mins", 0))
             enriched_places.append({
                 "place_id": stop.place_id,
                 "place": stop.name,
@@ -114,8 +120,11 @@ class RoamAroundAgent:
                 "rating": stop.rating,
                 "review_count": stop.review_count,
                 "price_level": stop.price_level,
-                "duration_mins": stop.duration_mins,
-                "duration_hours": stop.duration_hours,
+                "duration_mins": v_dur,
+                "duration_hours": round(v_dur / 60.0, 2),
+                "visit_duration": v_dur,
+                "travel_time_from_previous": t_prev,
+                "transit_from_prev_mins": t_prev,
                 "arrival_time": stop.arrival_clock,
                 "departure_time": stop.departure_clock,
                 "arrival_rel_mins": stop.arrival_rel_mins,
@@ -123,10 +132,13 @@ class RoamAroundAgent:
                 "time_estimate_reason": time_reason,
                 "ai_reasoning": ai_reason,
                 "score_breakdown": stop.score_breakdown or {},
-                "type": "restaurant" if stop.category in ["restaurant", "cafe", "food"] else "attraction"
+                "meal_type": getattr(stop, "meal_type", None),
+                "is_meal_stop": bool(getattr(stop, "meal_type", None)),
+                "type": "restaurant" if getattr(stop, "meal_type", None) or stop.category in ["restaurant", "cafe", "food", "bakery"] else "attraction"
             })
 
         # Step 4: Generate user-friendly 10-point JSON itinerary
+        actual_buffer = getattr(plan, "safety_buffer_mins", calculate_safety_buffer_mins(plan.total_travel_mins))
         user_itinerary_input = {
             "status": "success",
             "starting_location": {
@@ -144,8 +156,13 @@ class RoamAroundAgent:
                 "arrival_clock": plan.return_leg.get("final_return_clock", plan.end_clock)
             },
             "total_travel_time": plan.total_travel_mins,
+            "travel_time_minutes": plan.total_travel_mins,
             "total_visit_time": plan.total_dwell_mins,
+            "visit_time_minutes": plan.total_dwell_mins,
+            "safety_buffer": actual_buffer,
+            "safety_buffer_minutes": actual_buffer,
             "total_duration": plan.total_trip_mins,
+            "total_duration_minutes": plan.total_travel_mins + plan.total_dwell_mins + actual_buffer,
             "total_distance": plan.total_distance_km,
             "transportation_mode": travel_mode,
             "available_time_minutes": int(round(total_hours * 60)),
@@ -170,9 +187,16 @@ class RoamAroundAgent:
             "total_trip_mins": plan.total_trip_mins,
             "total_trip_hours": plan.total_trip_hours,
             "total_travel_mins": plan.total_travel_mins,
+            "travel_time_minutes": plan.total_travel_mins,
             "total_dwell_mins": plan.total_dwell_mins,
+            "visit_time_minutes": plan.total_dwell_mins,
             "total_distance_km": plan.total_distance_km,
             "slack_remaining_mins": plan.slack_remaining_mins,
+            "safety_buffer": actual_buffer,
+            "safety_buffer_mins": actual_buffer,
+            "safety_buffer_minutes": actual_buffer,
+            "total_duration_minutes": plan.total_travel_mins + plan.total_dwell_mins + actual_buffer,
+            "available_time_minutes": int(round(total_hours * 60)),
             "start_clock": plan.start_clock,
             "end_clock": plan.end_clock,
             "narrative": narrative,

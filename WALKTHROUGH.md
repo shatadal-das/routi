@@ -1,360 +1,547 @@
-# Routi: Technical Architecture & Codebase Walkthrough for LLMs
+# Routi: Technical Architecture & Codebase Walkthrough
 
-> **Target Audience**: Large Language Models (LLMs), AI code assistants, autonomous agentic runtimes, and human software architects inspecting or modifying this codebase.  
-> **Repository Purpose**: An AI-curated day trip planning engine that balances transit efficiency, venue vibes, budget tiers, and realistic visit dwell times using Google Places API (New), Google Routes API (TSP optimization), and Google Gemini (Gemini 3.8 Flash).
-
----
-
-## 1. High-Level System Architecture
-
-Routi is structured as a decoupled two-tier client-server application:
-
-```
-[ User Browser ]
-       │
-       ▼
-[ Frontend (React 19 + Vite + Tailwind CSS) ]
-  • SearchForm.jsx: Address autocomplete, vibe, budget, time inputs
-  • App.jsx: Central state hub, cycling status, Google Maps JS API script loader
-  • Timeline.jsx: Vertical itinerary, dynamic dwell times, AI rationale badges, Maps intent export
-  • Map.jsx: Dark mode canvas, SVG markers, decoded polyline, custom InfoWindows
-       │
-       │ HTTP REST API (JSON)
-       ▼
-[ Backend (FastAPI + Uvicorn) ]
-  • main.py: /api/generate-route, /api/places/autocomplete, /api/health
-       │
-       ├──► services/geocoding.py  ──► Google Places API (New: searchText)
-       ├──► services/places.py     ──► Google Places API (New: searchNearby & searchText)
-       ├──► services/ai_curator.py ──► Google Gemini API (gemini-3.8-flash)
-       └──► services/routing.py    ──► Google Routes API (computeRoutes TSP)
-```
+> **Document Type**: Comprehensive Engineering Walkthrough & Architectural Specification  
+> **Audience**: Software Engineers, System Architects, and Autonomous AI Assistants inspecting, extending, or maintaining this codebase.  
+> **Mission**: Build an AI-curated day trip planning engine that guarantees realistic schedules, round-trip loop closure, hard time budget adherence, and high venue quality by coupling **deterministic combinatorial optimization** with **Google Gemini conversational intelligence**.
 
 ---
 
-## 2. Directory & File Manifest
+## Table of Contents
 
-```
-/Users/shatadaldas/Developer/Projects/routi/
-├── backend/
-│   ├── .env                    # Secrets: GOOGLE_MAPS_API_KEY, GEMINI_API_KEY (gitignored)
-│   ├── .env.example            # Environment template
-│   ├── Procfile                # Web entrypoint for cloud PaaS (uvicorn main:app --host 0.0.0.0 --port $PORT)
-│   ├── requirements.txt        # Python dependencies (fastapi, uvicorn, google-generativeai, requests, pydantic)
-│   ├── main.py                 # FastAPI app, API router, request validation, pipeline orchestrator
-│   └── services/
-│       ├── __init__.py         # Package marker
-│       ├── ai_curator.py       # Gemini 3.8 Flash prompt engineering, model fallbacks, dwell time estimation
-│       ├── geocoding.py        # Location geocoding & autocomplete suggestions via Places API (New)
-│       ├── places.py           # Candidate venue discovery (Table A types, radius filtering, price levels)
-│       ├── routing.py          # Google Routes API (computeRoutes) TSP sequencing & Universal URL builder
-│       └── time_manager.py     # Deterministic activity count and meal allocation heuristics
-│
-├── frontend/
-│   ├── .env                    # Secrets: VITE_GOOGLE_MAPS_API_KEY, VITE_API_BASE_URL (gitignored)
-│   ├── .env.example            # Frontend environment template
-│   ├── index.html              # HTML5 entrypoint with Google Fonts (Inter)
-│   ├── package.json            # React 19, @react-google-maps/api, axios, tailwindcss, vite
-│   ├── vite.config.js          # Vite config with React plugin
-│   ├── tailwind.config.js      # Custom theme colors and responsive breakpoints
-│   └── src/
-│       ├── App.jsx             # Top-level state manager, loading status cycler, split-pane layout
-│       ├── main.jsx            # React root mount
-│       ├── index.css           # Tailwind directives and custom scrollbar styling
-│       ├── components/
-│       │   ├── SearchForm.jsx  # Trip Vibe input, live suggestions, budget/time selectors
-│       │   ├── Timeline.jsx    # Step-by-step timeline, AI rationale badges, Google Maps export
-│       │   └── Map.jsx         # GoogleMap wrapper, dark-theme styles, markers, polylines, InfoWindows
-│       └── utils/
-│           └── polyline.js     # Decoding utility for Google encoded polyline strings
-│
-├── .gitignore                  # Git exclusions: node_modules, venv, .env, dist, package-lock.json
-├── README.md                   # Human onboarding and quickstart guide
-└── WALKTHROUGH.md              # This comprehensive system guide
-```
+1. [High-Level Architectural Philosophy](#1-high-level-architectural-philosophy)
+2. [End-to-End System Architecture](#2-end-to-end-system-architecture)
+3. [Project Directory & File Manifest](#3-project-directory--file-manifest)
+4. [The Optimization & Scheduling Engine (`optimizer.py`)](#4-the-optimization--scheduling-engine-optimizerpy)
+   - [4.1 Orienteering Problem (OP) Formulation](#41-orienteering-problem-op-formulation)
+   - [4.2 The 6 Hard Constraints](#42-the-6-hard-constraints)
+   - [4.3 Multi-Objective Scoring & Diversity Penalties](#43-multi-objective-scoring--diversity-penalties)
+   - [4.4 Seeded Greedy Insertion Heuristic](#44-seeded-greedy-insertion-heuristic)
+   - [4.5 2-Opt Local Search TSP Tour Optimization](#45-2-opt-local-search-tsp-tour-optimization)
+   - [4.6 Meal Window & Dwell Time Scheduling](#46-meal-window--dwell-time-scheduling)
+   - [4.7 Dynamic Safety Buffer Formulation](#47-dynamic-safety-buffer-formulation)
+5. [The Autonomous AI Concierge Layer (`agent.py`, `tools.py`)](#5-the-autonomous-ai-concierge-layer-agentpy-toolspy)
+   - [5.1 Grounding & Anti-Hallucination Guarantees](#51-grounding--anti-hallucination-guarantees)
+   - [5.2 Tool Calling Interface](#52-tool-calling-interface)
+   - [5.3 Conversational Re-Planning Engine (`/api/agent/chat`)](#53-conversational-re-planning-engine-apiagentchat)
+6. [Place Intelligence & Taxonomy (`places.py`, `taxonomy.py`, `scorer.py`)](#6-place-intelligence--taxonomy-placespy-taxonomypy-scorerpy)
+   - [6.1 Google Places API (New) Querying](#61-google-places-api-new-querying)
+   - [6.2 Taxonomic Normalization & Iconic Landmarks](#62-taxonomic-normalization--iconic-landmarks)
+   - [6.3 Bayesian Rating Smoothing Formula](#63-bayesian-rating-smoothing-formula)
+7. [Routing & Navigation Layer (`routing.py`, `geocoding.py`)](#7-routing--navigation-layer-routingpy-geocodingpy)
+   - [7.1 Google Routes API & TSP Optimization](#71-google-routes-api--tsp-optimization)
+   - [7.2 Native Google Maps Navigation Export](#72-native-google-maps-navigation-export)
+8. [Frontend Architecture (`React 19` + `Vite` + `Tailwind CSS`)](#8-frontend-architecture-react-19--vite--tailwind-css)
+   - [8.1 State Management & Data Flow](#81-state-management--data-flow)
+   - [8.2 UI Components Deep Dive](#82-ui-components-deep-dive)
+9. [API Contract & Schema Reference](#9-api-contract--schema-reference)
+10. [End-to-End Execution Flow (Lifecycle of a Request)](#10-end-to-end-execution-flow-lifecycle-of-a-request)
 
 ---
 
-## 3. End-to-End Execution Flow
+## 1. High-Level Architectural Philosophy
 
-When a user submits a trip request:
+Travel planning applications typically suffer from one of two severe failure modes:
+
+1. **Pure LLM Generation**: LLMs hallucinate travel times, invent non-existent venues, ignore speed limits and physical geography, and fail basic arithmetic (producing 14-hour itineraries for a 4-hour window).
+2. **Pure Deterministic Solvers**: Rigid TSP algorithms select clustered, uninspiring venues, ignore subtle vibe preferences (e.g. *"artsy cafe with quiet seating"*), fail to handle meal times naturally, and lack natural-language adaptability.
+
+**Routi bridges this gap through a strict Separation of Concerns**:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                      ROUTI DUAL-ENGINE ARCHITECTURE                     │
+│                                                                        │
+│   ┌──────────────────────────────────┐  ┌──────────────────────────┐  │
+│   │   DETERMINISTIC OPTIMIZER        │  │     GEMINI AI CONCIERGE  │  │
+│   ├──────────────────────────────────┤  ├──────────────────────────┤  │
+│   │ • Mathematical OP / TSP Solver   │  │ • Natural Language Query │  │
+│   │ • Strict Return Loop Feasibility │  │ • Conversational Chat    │  │
+│   │ • Hard Time Budget Enforcement   │  │ • Vibe & Nuance Matching │  │
+│   │ • Meal Scheduling & Dwell Rules  │  │ • Narrative Storytelling │  │
+│   │ • Dynamic Safety Buffering       │  │ • Tool Calling Delegation│  │
+│   └─────────────────┬────────────────┘  └─────────────┬────────────┘  │
+│                     │                                 │               │
+│                     ▼                                 ▼               │
+│               [ Truth & Math ]                 [ Tone & Context ]     │
+│                     │                                 │               │
+│                     └────────────────┬────────────────┘               │
+│                                      ▼                                │
+│                       UNIFIED CLIENT-READY ITINERARY                  │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+> **The Golden Rule**: *The LLM is NEVER permitted to calculate travel times, geographic distances, or determine schedule feasibility. All physical calculations and constraints are delegated to the deterministic optimizer.*
+
+---
+
+## 2. End-to-End System Architecture
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor User
-    participant SF as SearchForm.jsx
-    participant APP as App.jsx
-    participant API as main.py (FastAPI)
-    participant GEO as geocoding.py
-    participant PLC as places.py
-    participant GEM as ai_curator.py (Gemini 3.8 Flash)
-    participant RUT as routing.py (Google Routes TSP)
-    participant UI as Timeline.jsx & Map.jsx
-
-    User->>SF: Input Origin, Vibe ("Relaxed waterfront walk..."), Budget ("$$"), Time (4.5h)
-    SF->>APP: onSubmit(payload)
-    APP->>APP: Set isLoading=true, start message cycler interval
-    APP->>API: POST /api/generate-route
-    API->>API: Validate time >= 2.0h, coordinates range
-    alt Address provided without lat/lng
-        API->>GEO: geocode_location(address)
-        GEO-->>API: {lat, lng, name, address}
+flowchart TD
+    User([User in Browser]) -->|1. Submit Trip Config| FE[Frontend: React 19 + Vite]
+    FE -->|2. POST /api/plan-trip| API[FastAPI Backend: main.py]
+    
+    API -->|3. Resolve Origin| GEO[services/geocoding.py]
+    GEO -->|Google Places Geocoding| GPlaces[Google Maps APIs]
+    
+    API -->|4. Discover Candidate Places| PLACES[services/places.py]
+    PLACES -->|searchNearby / searchText| GPlaces
+    
+    API -->|5. Score & Rank Candidates| SCORER[services/scorer.py + taxonomy.py]
+    
+    API -->|6. Run Optimization| OPT[services/optimizer.py]
+    subgraph Optimization Engine
+        OPT -->|Filter Candidates| OP_FILT[Radius & Quality Filter]
+        OP_FILT -->|Build Transit Matrix| MAT[Haversine / API Matrix]
+        MAT -->|Greedy Loop Insertion| INSERT[Seeded Insertion + Loop Check]
+        INSERT -->|Untangle Crossings| TWO_OPT[2-Opt Local Search TSP]
+        TWO_OPT -->|Assign Times & Meals| SCHED[Dwell & Meal Timetable]
+        SCHED -->|Compute Safety Slack| BUFF[Dynamic Safety Buffer]
     end
-    API->>PLC: fetch_candidate_places(lat, lng, radius=5000, vibe, max=20)
-    PLC-->>API: 20 Candidate Places (ratings, types, price levels)
-    API->>GEM: curate_itinerary(candidates, time_hours, vibe, budget)
-    GEM-->>API: Selected items with duration_mins, time_estimate_reason, ai_reasoning
-    API->>RUT: get_optimized_route(start_lat, start_lng, selected_places)
-    RUT-->>API: Waypoint order, overview_polyline, legs transit times, universal Maps URL
-    API-->>APP: Full JSON Response
-    APP->>APP: Set routeResult, isLoading=false
-    APP->>UI: Render Timeline (badges, dwell times) & Map (markers, bounds, polyline)
+    
+    OPT -->|7. Verified Itinerary| API
+    API -->|8. Fetch Polyline & Leg Details| ROUTE[services/routing.py]
+    ROUTE -->|computeRoutes TSP| GPlaces
+    
+    API -->|9. Optional AI Narrative| AGENT[services/agent.py + ai_curator.py]
+    AGENT -->|Gemini 3.8 Flash| GEMINI[Google AI Studio]
+    
+    API -->|10. Full JSON Payload| FE
+    FE -->|Render Polyline & Markers| MAP[components/Map.jsx]
+    FE -->|Render Timetable & Explainability| TL[components/Timeline.jsx]
+    FE -->|Interactive Concierge| CHAT[components/AgentChat.jsx]
+    CHAT -->|POST /api/agent/chat| API
 ```
 
 ---
 
-## 4. Detailed Component & Code Specifications
+## 3. Project Directory & File Manifest
 
-### 4.1 Backend Services
-
-#### `backend/main.py`
-- **Role**: Application entrypoint and HTTP API server.
-- **CORS**: Configured via `fastapi.middleware.cors.CORSMiddleware` with `allow_origins=["*"]` to support cloud deployment.
-- **Pydantic Model `RouteRequest`**:
-  ```python
-  class RouteRequest(BaseModel):
-      start_lat: Optional[float] = None
-      start_lng: Optional[float] = None
-      address: Optional[str] = None
-      time_hours: float
-      cuisine: Optional[str] = None
-      vibe: Optional[str] = None
-      vibe_preference: Optional[str] = None
-      price_level: Optional[str] = None
-  ```
-- **Endpoints**:
-  - `GET /api/health`: Returns service status, checks presence of `GOOGLE_MAPS_API_KEY` and `GEMINI_API_KEY`.
-  - `GET /api/places/autocomplete`: Queries `search_place_suggestions(query)` for live typeahead (minimum 2 chars).
-  - `POST /api/generate-route`: Orchestrates geocoding $\to$ candidate gathering $\to$ Gemini curation $\to$ Routes TSP $\to$ response compilation.
-- **Error Handling**: Throws `HTTPException(400)` for invalid coordinates or duration $< 2.0$ hours; `HTTPException(404)` if no places found; `HTTPException(502)` on upstream API failures.
-
-#### `backend/services/geocoding.py`
-- **`geocode_location(query: str)`**:
-  - Uses Google Places API (New): `POST https://places.googleapis.com/v1/places:searchText`
-  - FieldMask: `places.displayName,places.formattedAddress,places.location,places.id`
-  - Resolves textual names (e.g. "San Francisco Ferry Building") into coordinates.
-- **`search_place_suggestions(query: str)`**:
-  - Live query autocomplete; returns up to 5 results with `place_id`, `name`, `address`, `lat`, `lng`.
-
-#### `backend/services/places.py`
-- **`fetch_candidate_places(...)`**:
-  - Gathers up to 20 candidate venues within a 5km radius to provide diverse options for Gemini.
-  - Queries `https://places.googleapis.com/v1/places:searchNearby` with valid **Table A** primary types:
-    - `tourist_attraction`, `museum`, `park`, `art_gallery`, `cafe`, `restaurant`
-    - *(Critical: `point_of_interest` and `historical_landmark` are NOT supported in `includedTypes` and will cause a 400 error)*.
-  - Normalizes price levels using `PRICE_LEVEL_MAP`:
-    - `PRICE_LEVEL_INEXPENSIVE` $\to$ `$ (Budget-Friendly)`
-    - `PRICE_LEVEL_MODERATE` $\to$ `$$ (Moderate)`
-    - `PRICE_LEVEL_EXPENSIVE` $\to$ `$$$ (Upscale)`
-    - `PRICE_LEVEL_VERY_EXPENSIVE` $\to$ `$$$$ (Luxury)`
-  - Fallback mechanism: Uses text search (`places:searchText`) or legacy Places API Nearby Search if New Places API returns empty.
-
-#### `backend/services/ai_curator.py`
-- **Model Hierarchy**:
-  - Primary: `gemini-3.8-flash`
-  - Graceful Fallback Cascade: `gemini-2.5-flash` $\to$ `gemini-1.5-flash` $\to$ `_fallback_curation()` (heuristic engine).
-- **Prompt Structure**:
-  - Passes total available time in minutes, requested vibe, budget tier, and JSON candidates.
-  - Enforces `generation_config={"response_mime_type": "application/json"}`.
-  - Instructs Gemini to estimate:
-    - `duration_mins`: Realistic dwell time per venue (e.g., 30–45m for cafes/bakeries, 60–75m for parks/casual dining, 90–120m for major museums).
-    - `time_estimate_reason`: One-sentence justification for the dwell time.
-    - `ai_reasoning`: One-sentence explanation of why the venue matches the user's specific vibe and budget.
-- **Output Schema Expected from Gemini**:
-  ```json
-  [
-    {
-      "place_id": "string",
-      "duration_mins": 60,
-      "time_estimate_reason": "Rationale for visit duration",
-      "ai_reasoning": "Why this place matches vibe and budget"
-    }
-  ]
-  ```
-
-#### `backend/services/routing.py`
-- **`get_optimized_route(start_lat, start_lng, places)`**:
-  - Uses Google Routes API: `POST https://routes.googleapis.com/directions/v2:computeRoutes`
-  - FieldMask: `routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.legs,routes.optimizedIntermediateWaypointIndex`
-  - Sets `travelMode: "DRIVE"`, `optimizeWaypointOrder: "true"` (TSP solver).
-  - Handles the permutation returned in `optimizedIntermediateWaypointIndex` to reorder places into optimal driving sequence.
-  - Parses leg durations and distances into human-friendly strings (e.g. `12 mins`, `2.4 km`).
-  - Fallback: Calls legacy Google Directions API (`/maps/api/directions/json`) if Routes v2 fails.
-- **`build_google_maps_directions_url(...)`**:
-  - Builds Universal Google Maps Directions URL:
-    `https://www.google.com/maps/dir/?api=1&origin={lat},{lng}&destination={lat},{lng}&travelmode=driving&waypoints={lat1},{lng1}|{lat2},{lng2}`
-  - Respects waypoint constraints (up to 9 waypoints supported on desktop, 3 on mobile intent).
+```
+Routi/
+├── backend/
+│   ├── main.py                     # FastAPI routes, CORS, request validation, pipeline entrypoints
+│   ├── requirements.txt            # Python dependencies (FastAPI, Uvicorn, Google Generative AI, etc.)
+│   ├── .env.example                # Backend environment configuration template
+│   └── services/
+│       ├── __init__.py             # Python package marker
+│       ├── agent.py                # RoamAroundAgent: Gemini conversational concierge & re-planning engine
+│       ├── ai_curator.py           # Gemini prompt builder for trip narratives and fallback plans
+│       ├── geocoding.py            # Google Places API (New) address geocoding & autocomplete suggestions
+│       ├── itinerary_generator.py  # User-friendly presentation layer with 10-dimension JSON contract
+│       ├── optimizer.py            # Deterministic Orienteering Problem (OP) solver & 2-Opt TSP engine
+│       ├── places.py               # Google Places API candidate discovery (Table A types, radius bounds)
+│       ├── routing.py              # Google Routes API (computeRoutes, encoded polylines, directions URLs)
+│       ├── scorer.py               # Bayesian rating smoothing, preference matching, diversity penalties
+│       ├── taxonomy.py             # Place category taxonomy, iconic landmark identification, dwell rules
+│       ├── time_manager.py         # Time budgeting, slot calculations, travel pacing
+│       └── tools.py                # Deterministic tool suite consumed by RoamAroundAgent
+│
+├── frontend/
+│   ├── index.html                  # HTML entry point
+│   ├── package.json                # Dependencies (@react-google-maps/api, axios, tailwindcss, vite)
+│   ├── vite.config.js              # Vite configuration
+│   ├── tailwind.config.js          # Tailwind CSS design system tokens
+│   ├── .env.example                # Frontend environment configuration template
+│   └── src/
+│       ├── App.jsx                 # Application layout, global state coordinator, error boundary
+│       ├── main.jsx                # React root bootstrap
+│       ├── index.css               # Global styles, scrollbar styling, animations
+│       ├── components/
+│       │   ├── AgentChat.jsx       # Floating AI Concierge conversational chat drawer
+│       │   ├── Map.jsx             # Interactive Google Map (dark styling, SVG pins, polylines)
+│       │   ├── SearchForm.jsx      # Trip input form (start location, duration, transport, vibe)
+│       │   └── Timeline.jsx        # Chronological schedule, dwell time cards, explainability badges
+│       └── utils/
+│           └── polyline.js         # Polyline decoding utility for Google Routes overview_polyline
+│
+├── README.md                       # High-level overview, quickstart, and feature summary
+└── WALKTHROUGH.md                  # This document: Comprehensive architecture specification
+```
 
 ---
 
-### 4.2 Frontend Architecture
+## 4. The Optimization & Scheduling Engine (`optimizer.py`)
 
-#### `frontend/src/App.jsx`
-- **Single Script Loader**: Utilizes `@react-google-maps/api`'s `useJsApiLoader` once at the application root, passing `isLoaded` and `loadError` down to prevent script collision errors.
-- **Intelligent Loading States**:
-  - An interval hook automatically cycles through progressive state messages every 2.2 seconds while `isLoading === true`:
-    1. `"Scanning nearby spots..."`
-    2. `"AI is curating your vibe..."`
-    3. `"Estimating realistic dwell times..."`
-    4. `"Optimizing the driving route..."`
-- **Layout Management**:
-  - Two-column split-pane layout on desktop (`lg:grid-cols-12`: 5 cols for controls/timeline, 7 cols for sticky map).
-  - Clean vertical stacking on mobile (`order-1` controls/timeline, `order-2` map).
+The core of Routi is implemented in `backend/services/optimizer.py` (2,200+ lines). It formulates day trip generation as an **Orienteering Problem with Time Windows (OPTW)** and solves it using a combination of **Seeded Greedy Insertion** and **2-Opt Local Search**.
 
-#### `frontend/src/components/SearchForm.jsx`
-- **Trip Vibe**: Full text input with placeholder `"e.g., Relaxed waterfront walk and spicy food, no rushing."` and quick-select chips (`"Relaxed waterfront walk & spicy food"`, `"Scenic viewpoints & artisan coffee"`, `"Art galleries & quiet cafes"`, `"Local street food & markets"`).
-- **Autocomplete**: Debounced input (280ms) calling `/api/places/autocomplete` with click-outside detection.
-- **Preset Origins**: Quick-launch buttons for San Francisco, New York, and London.
-- **Budget Selection**: Segmented buttons for `$` (Budget), `$$` (Moderate), and `$$$` (Upscale).
-- **Time Slider**: Interactive range slider from 2.0 to 12.0 hours with step increments of 0.5 hours.
+### 4.1 Orienteering Problem (OP) Formulation
 
-#### `frontend/src/components/Timeline.jsx`
-- **Structure**: Vertical step-by-step timeline connecting the departure point, intermediary stops, transit legs, and return point.
-- **Dynamic Dwell Times**: Displays `{place.duration_mins} mins` instead of static hour blocks.
-- **AI Badges**:
-  - Rationale Badge: `✨ AI Chose this: {place.ai_reasoning}` styled in indigo/amber glassmorphism.
-  - Timing Rationale: `Timing: {place.time_estimate_reason}` displaying why dwell time was chosen.
-- **Navigation Export**: Direct button triggering `window.open(googleMapsUrl, '_blank')` to launch Google Maps in native app or browser with all waypoints pre-loaded.
+Let $V = \{v_0, v_1, \dots, v_n\}$ be the set of places, where $v_0$ is the starting origin (and designated destination).
+- Each candidate venue $v_i$ carries a non-negative score $S(v_i)$ and a visit dwell time $D(v_i)$.
+- For every pair $(v_i, v_j)$, the transit time is $T(v_i, v_j)$.
+- The user provides an available time budget $B$ in minutes.
 
-#### `frontend/src/components/Map.jsx`
-- **Theme**: Dark mode custom JSON styling (`#1e293b` roads/land, `#090d16` water).
-- **Markers**:
-  - Origin/Destination: Emerald SVG pin with white core dot.
-  - Restaurants/Dining: Amber SVG pin with cutlery glyph.
-  - Attractions/Sightseeing: Purple SVG pin with star glyph.
-- **Polyline & Bounds**:
-  - Decodes `overview_polyline` via `decodePolyline()`.
-  - Automatically bounds map viewport using `window.google.maps.LatLngBounds` whenever new coordinates load.
-- **Custom InfoWindow**: Shows rating, price level, address, and `⏱️ AI Estimated Stay: {duration_mins} mins`.
+The goal is to select a subset of venues $U \subseteq V \setminus \{v_0\}$ and an ordering $(v_{\pi(1)}, v_{\pi(2)}, \dots, v_{\pi(k)})$ to:
+
+$$\max \sum_{i=1}^k S(v_{\pi(i)})$$
+
+subject to the round-trip time budget constraint:
+
+$$T(v_0, v_{\pi(1)}) + \sum_{i=1}^{k-1} \left( D(v_{\pi(i)}) + T(v_{\pi(i)}, v_{\pi(i+1)}) \right) + D(v_{\pi(k)}) + T(v_{\pi(k)}, v_0) + \text{Buffer}(k) \le B$$
+
+### 4.2 The 6 Hard Constraints
+
+The optimizer strictly enforces six non-negotiable invariants:
+
+| # | Hard Constraint | Enforcement Mechanism |
+|---|---|---|
+| **1** | **Origin Start** | Route leg 0 strictly originates at the user's geocoded starting coordinates. |
+| **2** | **Round-Trip Loop** | The final leg strictly returns to the starting coordinates ($v_{\pi(k)} \to v_0$). |
+| **3** | **Hard Time Budget** | Total trip time (travel + dwell + safety buffer) cannot exceed available minutes. |
+| **4** | **Guaranteed Return Reservation** | When testing candidate $v_{\text{cand}}$, the engine checks: `elapsed + travel(curr, cand) + dwell(cand) + travel(cand, start) + buffer <= available_time`. If false, candidate is rejected immediately. |
+| **5** | **No Duplicate Places** | Venues are deduplicated by Google `place_id` and normalized name + geographic coordinates within 50 meters. |
+| **6** | **No Unreachable Stops** | Candidate venues with transit time exceeding remaining slack are discarded. |
+
+### 4.3 Multi-Objective Scoring & Diversity Penalties
+
+Before insertion, each candidate place is evaluated by `services/scorer.py` using multi-factor Bayesian-smoothed scoring:
+
+$$\text{TotalScore}(v) = w_r \cdot \text{BayesianRating}(v) + w_v \cdot \text{VibeMatch}(v) + w_p \cdot \text{ProximityScore}(v) - \text{Penalty}_{\text{cat}}(v)$$
+
+- **Bayesian Rating**: Smoothes raw 1–5 star ratings based on total review count so a 5.0 star place with 2 reviews does not outrank a 4.7 star venue with 8,000 reviews.
+- **Vibe Match**: Natural language token overlap and semantic keyword intersection against user-provided interests.
+- **Category Repetition Penalty**: Each subsequent venue from an already-selected category receives an exponential diminishing-returns penalty:
+
+$$\text{Penalty}_{\text{cat}}(c) = 0.35 \times (\text{count}(c))^2$$
+
+This prevents itineraries from recommending 4 museums or 3 coffee shops in a single day.
+
+### 4.4 Seeded Greedy Insertion Heuristic
+
+```
+1. Initialize itinerary = [Start_Location]
+2. Rank all candidate places by initial Score.
+3. Select highest-scoring place as initial seed anchor.
+4. While available time remains:
+     a. For each unvisited candidate c:
+          i. Evaluate insertion into every possible position in the current tour.
+          ii. Calculate delta_travel = travel(i-1, c) + travel(c, i) - travel(i-1, i)
+          iii. Calculate total_needed = delta_travel + dwell(c) + buffer_delta
+          iv. If (current_duration + total_needed) <= available_time:
+                 efficiency_ratio = Score(c) / max(1.0, delta_travel)
+                 Track best candidate with highest efficiency_ratio
+     b. If a valid candidate is found:
+          Insert into best position.
+        Else:
+          Break (no more candidates can fit with guaranteed return loop).
+```
+
+### 4.5 2-Opt Local Search TSP Tour Optimization
+
+Greedy insertion can produce crossing route segments. The optimizer runs a **2-Opt Local Search** algorithm over the selected stops (keeping Start/End fixed):
+
+```
+repeat until no improvement:
+    for i from 1 to k-1:
+        for j from i+1 to k:
+            delta = distance(i-1, j) + distance(i, j+1) - (distance(i-1, i) + distance(j, j+1))
+            if delta < 0:
+                reverse tour segment from i to j
+```
+
+This untangles path crossings and significantly reduces total transit time.
+
+### 4.6 Meal Window & Dwell Time Scheduling
+
+Routi avoids scheduling meals at unrealistic hours (e.g. lunch at 10:00 AM or 4:00 PM):
+
+```
+Lunch Window:   12:00 PM – 02:30 PM (Ideal target: 12:45 PM – 01:30 PM)
+Dinner Window:  06:30 PM – 09:30 PM (Ideal target: 07:00 PM – 08:30 PM)
+```
+
+- **Meal Inclusion Logic**: If the itinerary overlaps lunch or dinner hours, the engine prioritizes inserting a top-rated dining venue into the matching time slot.
+- **Dwell Time by Category** (`taxonomy.py`):
+  - `museum / gallery`: 90–120 mins
+  - `park / scenic viewpoint`: 45–60 mins
+  - `historic landmark / temple`: 60–90 mins
+  - `casual dining / lunch`: 60 mins
+  - `sit-down dinner`: 75–90 mins
+  - `cafe / bakery`: 35–45 mins
+
+### 4.7 Dynamic Safety Buffer Formulation
+
+To guarantee that travelers never miss their return deadline due to unexpected traffic or dwell overruns:
+
+$$\text{SafetyBuffer} = \min\left(45, \; 10 + (\text{num\_stops} \times 4) + \text{ModeBuffer}\right)$$
+
+Where:
+- $\text{ModeBuffer}(\text{DRIVE}) = 10\text{ mins}$ (traffic variability)
+- $\text{ModeBuffer}(\text{WALK}) = 5\text{ mins}$
+- $\text{ModeBuffer}(\text{BICYCLE}) = 5\text{ mins}$
+
+The resulting buffer (typically 15–30 minutes) is reported explicitly on the frontend timeline as peace-of-mind slack.
 
 ---
 
-## 5. API Contracts & Data Schemas
+## 5. The Autonomous AI Concierge Layer (`agent.py`, `tools.py`)
 
-### Request: `POST /api/generate-route`
+The conversational layer (`services/agent.py`) implements `RoamAroundAgent`, powered by Google Gemini (with fallbacks: `gemini-2.5-flash`, `gemini-flash-latest`, `gemini-3.8-flash`).
+
+### 5.1 Grounding & Anti-Hallucination Guarantees
+
+When generating day-flow narratives or answering conversational chat queries, the agent operates under strict instructions:
+
+1. **Zero Math Invention**: The LLM must not compute distances or transit durations; it only references the numbers produced by the optimizer.
+2. **Fact Preservation**: Coordinates, ratings, categories, and arrival timestamps are copied directly from structured tool outputs.
+3. **Transparent Explainability**: If a user asks *"Why wasn't the museum included?"*, the agent reads `rejected_destinations` and answers with mathematical precision (e.g. *"Adding the museum would require 75 minutes of dwell plus 22 minutes detour, which exceeds your remaining 35 minutes of time budget."*).
+
+### 5.2 Tool Calling Interface
+
+The agent has access to 4 deterministic tools defined in `backend/services/tools.py`:
+
+```python
+# 1. Place Search
+search_places(query="coffee shops near me", lat=28.6139, lng=77.2090, radius_km=5.0)
+
+# 2. Place Verification
+get_place_details(place_id="ChIJ...")
+
+# 3. Exact Routing
+get_route(origin_lat=28.6139, origin_lng=77.2090, dest_lat=28.6562, dest_lng=77.2410, mode="DRIVE")
+
+# 4. Route Optimization
+optimize_trip(start_lat=28.6139, start_lng=77.2090, available_time_minutes=240, candidate_places=[...])
+```
+
+### 5.3 Conversational Re-Planning Engine (`/api/agent/chat`)
+
+When the user types a prompt in the frontend chat drawer (e.g. *"Remove the restaurant"*, *"Add a nature stop"*, *"Make it 1 hour shorter"*), the request hits `POST /api/agent/chat`:
+
+1. **Intent Classification**: Gemini determines if the message is conversational advice or an itinerary modification.
+2. **Tool Execution**: If a change is needed (e.g. remove restaurant), the agent filters the current candidate set or adjusts duration parameters and calls `optimize_trip()`.
+3. **Schedule Recalculation**: The optimizer re-runs 2-Opt TSP and timetable scheduling.
+4. **Synchronized Response**: Returns both the conversational text answer and the full updated route object, triggering an immediate UI update on the Map and Timeline.
+
+---
+
+## 6. Place Intelligence & Taxonomy (`places.py`, `taxonomy.py`, `scorer.py`)
+
+### 6.1 Google Places API (New) Querying
+
+Routi utilizes the modern **Google Places API (New)** REST endpoints (`v1/places:searchNearby` and `v1/places:searchText`):
+
+- **FieldMask Optimization**: Every API request specifies strict field masks to minimize latency and billing cost:
+  `places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.primaryType,places.types`
+- **Multi-Category Fetching**: Automatically batches queries across diverse categories (`tourist_attraction`, `historical_landmark`, `park`, `art_gallery`, `museum`, `restaurant`, `cafe`).
+
+### 6.2 Taxonomic Normalization & Iconic Landmarks
+
+`services/taxonomy.py` categorizes raw Google types into clean internal buckets:
+
+```python
+CATEGORY_LANDMARK    = "landmark"
+CATEGORY_FOOD        = "restaurant"
+CATEGORY_CAFE        = "cafe"
+CATEGORY_NATURE      = "nature"
+CATEGORY_CULTURE     = "culture"
+CATEGORY_VIEWPOINT   = "viewpoint"
+CATEGORY_WATERFRONT  = "waterfront"
+CATEGORY_SHOPPING    = "shopping"
+```
+
+It also maintains an **Iconic Landmark Registry** (e.g. Taj Mahal, Red Fort, Golden Gate Bridge, Eiffel Tower) with verified baseline visit durations to prevent the optimizer from allotting inadequate time to major monuments.
+
+### 6.3 Bayesian Rating Smoothing Formula
+
+To eliminate biased outliers:
+
+$$R_{\text{Bayes}} = \frac{C \cdot m + \sum r}{C + n} = \frac{C \cdot m + n \cdot \bar{r}}{C + n}$$
+
+Where:
+- $m = 4.2$ (prior global mean rating)
+- $C = 25$ (confidence weight / minimum review threshold)
+- $\bar{r} = \text{venue's average star rating}$
+- $n = \text{total user review count}$
+
+---
+
+## 7. Routing & Navigation Layer (`routing.py`, `geocoding.py`)
+
+### 7.1 Google Routes API & TSP Optimization
+
+For final turn-by-turn routes and polylines, `services/routing.py` calls the **Google Routes API** (`v2:computeRoutes`):
+
+- Sets `optimizeWaypointOrder: true` for server-side validation of waypoint sequences.
+- Requests `polylineEncoding: ENCODED_POLYLINE` for network transmission.
+- Extracts per-leg distance, duration, and step instructions.
+
+### 7.2 Native Google Maps Navigation Export
+
+Routi generates a native Google Maps Universal Directions URL formatted to open directly in the user's mobile Google Maps application:
+
+```
+https://www.google.com/maps/dir/?api=1&origin=28.6139,77.2090&destination=28.6139,77.2090&travelmode=driving&waypoints=28.6289,77.2065|28.6562,77.2410|28.6129,77.2295
+```
+
+Clicking **"Open Live Route in Google Maps"** launches turn-by-turn GPS navigation across all stops in the exact sequence curated by Routi.
+
+---
+
+## 8. Frontend Architecture (`React 19` + `Vite` + `Tailwind CSS`)
+
+### 8.1 State Management & Data Flow
+
+The frontend state is centralized in `src/App.jsx`:
+
+```mermaid
+flowchart LR
+    SearchForm[SearchForm.jsx] -->|onSubmit(formData)| App[App.jsx]
+    App -->|currentItinerary| Timeline[Timeline.jsx]
+    App -->|currentItinerary + activeStop| Map[Map.jsx]
+    App -->|currentItinerary + onUpdateRoute| AgentChat[AgentChat.jsx]
+    Timeline -->|onSelectStop(id)| App
+    Map -->|onMarkerClick(id)| App
+```
+
+### 8.2 UI Components Deep Dive
+
+| Component | Key Responsibilities |
+|---|---|
+| **`App.jsx`** | Central state holder (`itinerary`, `activeStopId`, `isLoading`). Loads the Google Maps JavaScript API via `@react-google-maps/api`. Renders sticky dual-column desktop view. |
+| **`SearchForm.jsx`** | Debounced place search suggestions (`/api/places/autocomplete`), time duration slider, 12h/24h start time picker with dynamic expected return clock, transport mode selector, interest tag toggles, and price tiers. |
+| **`Timeline.jsx`** | Chronological vertical schedule. Shows arrival/departure timestamps, transit leg metrics (distance + travel mins), category badges, AI selection rationale tags, dwell time justifications, safety buffer alert, and rejected destinations drawer. |
+| **`Map.jsx`** | Dark-mode Google Map (`#1e293b`). Renders numbered custom SVG map markers for each stop, departure flag, decoded route polyline, and interactive InfoWindows on click. |
+| **`AgentChat.jsx`** | Floating AI Concierge drawer. Features quick-action prompt chips (e.g. *Remove Restaurant*, *Add Cafe*, *Make Shorter*) and natural-language chat that directly modifies the live itinerary. |
+
+---
+
+## 9. API Contract & Schema Reference
+
+### 1. Unified Trip Planning
+
+- **Endpoint**: `POST /api/plan-trip` (also available as `POST /api/generate-route`)
+- **Headers**: `Content-Type: application/json`
+
+#### Request Schema:
+
 ```json
 {
-  "address": "San Francisco Ferry Building",
-  "start_lat": 37.7955,
-  "start_lng": -122.3937,
-  "time_hours": 4.5,
-  "vibe": "Relaxed waterfront walk and spicy food, no rushing.",
+  "start_location": {
+    "lat": 28.6139,
+    "lng": 77.2090,
+    "address": "Connaught Place, New Delhi"
+  },
+  "available_time_minutes": 300,
+  "start_time": "09:30 AM",
+  "transport_mode": "DRIVE",
+  "interests": ["Historic Landmarks", "Local Cuisine", "Photography"],
   "price_level": "$$"
 }
 ```
 
-### Response: `POST /api/generate-route`
+#### Response Contract (Key Fields):
+
 ```json
 {
+  "success": true,
   "status": "success",
-  "message": "AI-curated route generated successfully",
-  "curator_model": "gemini-3.8-flash",
-  "vibe": "Relaxed waterfront walk and spicy food, no rushing.",
-  "vibe_preference": "Relaxed waterfront walk and spicy food, no rushing.",
-  "price_level": "$$",
-  "start_location": {
-    "name": "San Francisco Ferry Building",
-    "address": "1 Ferry Building, San Francisco, CA 94105",
-    "lat": 37.7955,
-    "lng": -122.3937
+  "trip": {
+    "title": "New Delhi Day Trip Loop",
+    "total_duration_mins": 285,
+    "total_travel_mins": 55,
+    "total_dwell_mins": 210,
+    "safety_buffer_mins": 20,
+    "distance_km": 18.4,
+    "transport_mode": "DRIVE",
+    "start_clock": "09:30 AM",
+    "end_clock": "02:15 PM",
+    "return_to_start": true,
+    "stops": [ ... ]
   },
   "optimized_places": [
     {
       "place_id": "ChIJ...",
-      "name": "Oracle Park",
-      "lat": 37.7786,
-      "lng": -122.3893,
-      "duration_mins": 60,
-      "duration_hours": 1.0,
-      "time_estimate_reason": "60 minutes estimated for scenic walking trails and skyline viewpoints.",
-      "ai_reasoning": "Top waterfront spot matching your relaxed walking preference.",
-      "type": "tourist_attraction",
-      "rating": 4.7,
-      "price_level": "$$ (Moderate)",
-      "address": "24 Willie Mays Plaza, San Francisco, CA"
+      "name": "Humayun's Tomb",
+      "lat": 28.5933,
+      "lng": 77.2507,
+      "arrival_time": "10:00 AM",
+      "departure_time": "11:30 AM",
+      "duration_mins": 90,
+      "category": "landmark",
+      "selection_reasons": ["Top Rated (4.6★)", "Historic Monument", "Proximity"],
+      "ai_reasoning": "UNESCO World Heritage site with stunning Mughal architecture and tranquil gardens.",
+      "time_estimate_reason": "Standard dwell time of 90 minutes for expansive monument grounds."
     }
   ],
-  "total_trip_time": "4.5 hours",
-  "total_trip_hours": 4.5,
-  "polyline": "encoded_polyline_string...",
-  "google_maps_url": "https://www.google.com/maps/dir/?api=1&origin=...",
-  "legs": [
+  "polyline": "m`~bF...",
+  "google_maps_url": "https://www.google.com/maps/dir/?...",
+  "rejected_destinations": [
     {
-      "start_address": "San Francisco Ferry Building",
-      "end_address": "Oracle Park",
-      "duration_mins": 12,
-      "duration_text": "12 mins",
-      "distance_meters": 2300,
-      "distance_text": "2.3 km"
+      "name": "Qutub Minar",
+      "reason": "Excluded: Detour travel time (38 mins) exceeds remaining slack."
     }
-  ],
-  "is_mock": false
+  ]
 }
 ```
 
----
+### 2. Conversational Agent Chat
 
-## 6. Critical Technical Constraints & Edge Cases
+- **Endpoint**: `POST /api/agent/chat`
+- **Request Body**:
 
-1. **Google Places API (New) FieldMasks & Types**:
-   - `searchNearby` and `searchText` strictly require the `X-Goog-FieldMask` header. Omitting this header returns empty or erroneous responses.
-   - `includedTypes` only accepts primary types from **Table A** (e.g. `tourist_attraction`, `park`, `museum`, `restaurant`). Types like `point_of_interest` or `historical_landmark` will fail with `400 INVALID_ARGUMENT`.
-2. **Gemini Rate Limits & Resilience**:
-   - Free tier Gemini Flash models enforce a 5 Requests Per Minute (RPM) ceiling.
-   - `ai_curator.py` wraps calls in an exception handler that cascades through `gemini-3.8-flash` $\to$ `gemini-2.5-flash` $\to$ `gemini-1.5-flash` before gracefully falling back to deterministic heuristic curation.
-3. **Google Routes TSP Reordering**:
-   - The Routes API returns `routes.optimizedIntermediateWaypointIndex` as an array of original index permutations (e.g. `[1, 0]`). The backend explicitly remaps the places array using this index order before returning.
-4. **Google Maps Intent Restrictions**:
-   - The universal navigation link uses `travelmode=driving`. Waypoints are joined with pipe `|` separators and URL-encoded. Mobile browsers limit native map URL intents to 3 waypoints; desktop supports up to 9.
-5. **No Script Duplication in React**:
-   - Never load `@react-google-maps/api` or the Google Maps `<script>` in both `App.jsx` and child components (`SearchForm`, `Map`). Maintain one single loader instance via `useJsApiLoader` in `App.jsx`.
-
----
-
-## 7. How to Run & Verify
-
-### Environment Variables
-- `backend/.env`:
-  ```env
-  GOOGLE_MAPS_API_KEY=AIzaSy...
-  GEMINI_API_KEY=AIzaSy...
-  ```
-- `frontend/.env`:
-  ```env
-  VITE_GOOGLE_MAPS_API_KEY=AIzaSy...
-  VITE_API_BASE_URL=http://localhost:8000
-  ```
-
-### Startup Commands
-```bash
-# Terminal 1: Backend
-cd backend
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-# Terminal 2: Frontend
-cd frontend
-npm install
-npm run dev -- --host
+```json
+{
+  "message": "Can you swap the lunch spot for a vegetarian cafe?",
+  "conversation_history": [ ... ],
+  "current_itinerary": { ... },
+  "start_location": { "lat": 28.6139, "lng": 77.2090 }
+}
 ```
 
-### Verification Checklist
-- [x] Autocomplete returns suggestions for partial inputs.
-- [x] Custom Trip Vibe text is transmitted to the backend.
-- [x] Cycling loading indicators display on frontend during calculation.
-- [x] Gemini curates venues and estimates dynamic visit durations in minutes.
-- [x] Timeline renders `✨ AI Chose this:` rationale badge and `Timing:` explanation for each stop.
-- [x] "Open in Google Maps" opens the multi-stop route in Google Maps.
-- [x] Responsive layout stacks vertically on mobile viewports (<640px).
+- **Response**: Returns message string, applied modification summary, and full `route_result` object to synchronize frontend state.
+
+---
+
+## 10. End-to-End Execution Flow (Lifecycle of a Request)
+
+The following diagram details the exact step-by-step lifecycle from the moment a user clicks **"Plan My Day Trip"**:
+
+```
+[User Browser]
+  │
+  ├─► User enters "Connaught Place", selects 5 hours, DRIVE, and clicks "Plan My Day Trip".
+  │
+[Frontend SearchForm.jsx]
+  ├─► Validates inputs & geocodes address if coordinates not already cached.
+  ├─► Dispatches POST /api/plan-trip to FastAPI backend.
+  │
+[Backend main.py]
+  ├─► Validates time budget (>= 45 mins) and coordinates.
+  ├─► Calls services/places.py to query 50+ candidate venues from Google Places API (New).
+  │
+[Backend scorer.py + taxonomy.py]
+  ├─► Normalizes categories (landmarks, cafes, dining, nature).
+  ├─► Applies Bayesian smoothing to venue star ratings.
+  ├─► Computes vibe and keyword relevance scores.
+  │
+[Backend optimizer.py]
+  ├─► Selects top-scoring seed venue.
+  ├─► Iteratively inserts candidates using value-to-detour ratio.
+  ├─► Strictly enforces return loop transit reservation:
+  │     elapsed + travel(curr, cand) + dwell(cand) + travel(cand, start) + buffer <= available_time
+  ├─► Runs 2-Opt local search TSP to untangle intersecting legs.
+  ├─► Inserts meal stop into 12:00 PM – 2:30 PM lunch window if applicable.
+  ├─► Generates timetable with arrival and departure timestamps.
+  │
+[Backend routing.py]
+  ├─► Calls Google Routes API (computeRoutes) to obtain exact encoded polyline & turn directions.
+  ├─► Generates universal Google Maps directions link with waypoints.
+  │
+[Backend main.py ──► Frontend App.jsx]
+  ├─► Returns JSON payload with stops, polylines, explainability tags, and safety buffer.
+  │
+[Frontend Map.jsx & Timeline.jsx]
+  ├─► Timeline renders chronological stops with category icons and rationale badges.
+  ├─► Map renders dark theme, numbered stop markers, and animated route polyline.
+  │
+[User Interactive Modification]
+  └─► User opens AgentChat drawer: "Make it more relaxed".
+        │
+        └─► Re-runs optimizer with relaxed dwell times and returns updated schedule in real time.
+```
+
+---
+
+*This document reflects the production architecture of Routi as of September 2026.*

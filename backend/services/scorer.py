@@ -19,6 +19,8 @@ from typing import List, Dict, Any, Optional, Set, Tuple
 import math
 import re
 
+from services.taxonomy import normalize_category
+
 
 @dataclass
 class ScoringConfig:
@@ -364,7 +366,8 @@ def calculate_category_diversity(
     Applies diminishing returns if the category already appears in the itinerary.
     """
     cat = (category or "general").lower().strip()
-    match_count = sum(1 for c in selected_categories if c.lower().strip() == cat)
+    cat_norm = normalize_category(category) or cat
+    match_count = sum(1 for c in selected_categories if (normalize_category(c) or (c or "").lower().strip()) == cat_norm)
 
     # Multiplier decays: 1.0 (0 prior), 0.3 (1 prior), 0.09 (2 prior)
     multiplier = config.category_decay_factor ** match_count

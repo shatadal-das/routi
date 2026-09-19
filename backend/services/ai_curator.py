@@ -84,7 +84,7 @@ Here is the candidate list of top places discovered in the area:
 
 Instructions:
 1. Select the optimal subset of candidate places that best matches the requested vibe ("{vibe}") and budget ("{budget}").
-2. AI Time Estimation (Crucial): For EACH selected spot, estimate the realistic dwell time in minutes ("duration_mins") based on:
+2. AI Time Estimation (Crucial): For EACH selected spot, allocate a realistic visit duration rounded to clean 15-minute increments (e.g. 30, 45, 60, 75, 90, or 120 mins, NEVER odd numbers like 38 or 52 mins) based on:
    - Venue scale and nature (e.g., 30-45 mins for quick bakeries/cafes/viewpoints, 60-75 mins for parks/markets/casual dining, 90-120 mins for major museums or full sit-down meals).
    - Expected pace and buffer for ordering/queuing.
    - Pacing within the user's total available {time_hours} hours (assuming ~15-20 minutes transit between stops).

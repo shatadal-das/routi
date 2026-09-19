@@ -254,14 +254,14 @@ export default function Map({
 
         {/* POI Markers: Attractions & Restaurants */}
         {places.map((place, idx) => {
-          const isRestaurant = place.type === 'restaurant';
+          const isRestaurant = place.type === 'restaurant' || place.is_meal_stop || !!place.meal_type;
           return (
             <MarkerF
               key={place.place_id || `marker-${idx}`}
               position={{ lat: place.lat, lng: place.lng }}
               icon={isRestaurant ? getRestaurantMarkerIcon() : getAttractionMarkerIcon()}
-              title={`${place.name} (${isRestaurant ? 'Dining' : 'Attraction'})`}
-              onClick={() => setSelectedMarker(place)}
+              title={`Stop ${idx + 1}: ${place.name} (${isRestaurant ? (place.meal_type || 'Dining') : 'Attraction'})`}
+              onClick={() => setSelectedMarker({ ...place, stop_number: idx + 1, isRestaurant })}
             />
           );
         })}
@@ -284,43 +284,66 @@ export default function Map({
             position={{ lat: selectedMarker.lat, lng: selectedMarker.lng }}
             onCloseClick={() => setSelectedMarker(null)}
           >
-            <div className="p-1 max-w-xs text-slate-900">
-              <span
-                className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full mb-1 ${
-                  selectedMarker.type === 'restaurant'
-                    ? 'bg-amber-100 text-amber-800'
+            <div className="p-1.5 max-w-xs text-slate-900 font-sans">
+              <div className="flex items-center justify-between gap-1 mb-1">
+                <span
+                  className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                    selectedMarker.isRestaurant || selectedMarker.type === 'restaurant' || selectedMarker.meal_type
+                      ? 'bg-amber-100 text-amber-800'
+                      : selectedMarker.type === 'start'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-indigo-100 text-indigo-800'
+                  }`}
+                >
+                  {selectedMarker.stop_number ? `Stop ${selectedMarker.stop_number} • ` : ''}
+                  {selectedMarker.meal_type
+                    ? `🍽️ ${selectedMarker.meal_type}`
+                    : selectedMarker.isRestaurant || selectedMarker.type === 'restaurant'
+                    ? '🍽️ Dining'
                     : selectedMarker.type === 'start'
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : 'bg-indigo-100 text-indigo-800'
-                }`}
-              >
-                {selectedMarker.type === 'restaurant'
-                  ? 'Curated Dining'
-                  : selectedMarker.type === 'start'
-                  ? 'Departure & Return'
-                  : 'Featured Highlight'}
-              </span>
-              <h4 className="font-bold text-sm text-slate-900 leading-tight">
+                    ? '🕐 Departure Point'
+                    : selectedMarker.category || 'Attraction'}
+                </span>
+                {selectedMarker.arrival_time && selectedMarker.departure_time && (
+                  <span className="text-[10px] font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded font-mono">
+                    {selectedMarker.arrival_time}–{selectedMarker.departure_time}
+                  </span>
+                )}
+              </div>
+
+              <h4 className="font-bold text-sm text-slate-900 leading-tight mt-0.5">
                 {selectedMarker.name}
               </h4>
+
               {selectedMarker.rating && (
-                <p className="text-xs text-amber-600 font-semibold mt-0.5">
-                  ★ {Number(selectedMarker.rating).toFixed(1)} / 5.0
+                <p className="text-xs text-amber-600 font-semibold mt-1 flex items-center space-x-1">
+                  <span>★</span>
+                  <span>{Number(selectedMarker.rating).toFixed(1)} / 5.0</span>
                 </p>
               )}
-              {(selectedMarker.duration_mins || selectedMarker.duration_hours) && (
+
+              {(selectedMarker.visit_duration || selectedMarker.visit_duration_minutes || selectedMarker.duration_mins) && (
                 <p className="text-xs text-indigo-700 font-semibold mt-0.5">
-                  ⏱️ AI Estimated Stay: {selectedMarker.duration_mins ? `${selectedMarker.duration_mins} mins` : `${selectedMarker.duration_hours || 1.0} hr`}
+                  ⏱️ {selectedMarker.meal_type ? 'Meal Duration' : 'Visit Duration'}: {selectedMarker.visit_duration || selectedMarker.visit_duration_minutes || selectedMarker.duration_mins} mins
                 </p>
               )}
-              {selectedMarker.time_estimate_reason && (
-                <p className="text-[11px] text-slate-600 italic mt-0.5">
-                  {selectedMarker.time_estimate_reason}
+
+              {selectedMarker.travel_time_from_previous > 0 && (
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  🚗 Travel from previous: {selectedMarker.travel_time_from_previous} mins
                 </p>
               )}
+
+              {(selectedMarker.selection_reasons?.length > 0 || selectedMarker.reason || selectedMarker.ai_reasoning) && (
+                <p className="text-[11px] text-slate-700 italic mt-1 pt-1 border-t border-slate-200">
+                  <span className="font-semibold text-slate-900 not-italic">Reason: </span>
+                  {selectedMarker.selection_reasons?.join(' • ') || selectedMarker.reason || selectedMarker.ai_reasoning}
+                </p>
+              )}
+
               {selectedMarker.address && (
-                <p className="text-[11px] text-slate-500 mt-1 truncate">
-                  {selectedMarker.address}
+                <p className="text-[10px] text-slate-500 mt-1 truncate">
+                  📍 {selectedMarker.address}
                 </p>
               )}
             </div>
