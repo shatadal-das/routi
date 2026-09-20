@@ -192,8 +192,3 @@ docker run -p 8000:80 --env-file backend/.env routi-backend
   "rejected_destinations": []
 }
 ```
-
----
-
-## 📄 License
-MIT
