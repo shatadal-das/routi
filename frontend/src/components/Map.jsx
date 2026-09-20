@@ -5,64 +5,84 @@ import { decodePolyline } from '../utils/polyline';
 const containerStyle = {
   width: '100%',
   height: '100%',
-  minHeight: '520px',
   borderRadius: '1rem',
 };
 
-// Sleek dark mode map styling
-const darkMapStyle = [
-  { elementType: 'geometry', stylers: [{ color: '#1e293b' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#1e293b' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#94a3b8' }] },
+// Sleek, light, and minimalist map styling matching brand palette
+const lightMapStyle = [
+  // 1. Soft off-white / brand-cream background landscape
+  {
+    elementType: 'geometry',
+    stylers: [{ color: '#F8F5EE' }],
+  },
+  {
+    elementType: 'labels.text.stroke',
+    stylers: [{ color: '#ffffff' }, { weight: 2 }],
+  },
+  {
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#9ca3af' }],
+  },
+  {
+    featureType: 'administrative',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#9ca3af' }],
+  },
   {
     featureType: 'administrative.locality',
     elementType: 'labels.text.fill',
-    stylers: [{ color: '#cbd5e1' }],
+    stylers: [{ color: '#9ca3af' }],
   },
+  // 2. CRUCIAL CLUTTER FIX: Hide POIs and Transit
   {
     featureType: 'poi',
-    elementType: 'labels.text.fill',
-    stylers: [{ color: '#64748b' }],
+    stylers: [{ visibility: 'off' }],
   },
   {
-    featureType: 'poi.park',
-    elementType: 'geometry',
-    stylers: [{ color: '#0f172a' }],
+    featureType: 'transit',
+    stylers: [{ visibility: 'off' }],
   },
+  // 3. Roads & Highways - clean light styling
   {
     featureType: 'road',
     elementType: 'geometry',
-    stylers: [{ color: '#334155' }],
+    stylers: [{ color: '#ffffff' }],
   },
   {
     featureType: 'road',
     elementType: 'geometry.stroke',
-    stylers: [{ color: '#1e293b' }],
+    stylers: [{ color: '#e2e8f0' }],
   },
   {
     featureType: 'road',
     elementType: 'labels.text.fill',
-    stylers: [{ color: '#94a3b8' }],
+    stylers: [{ color: '#9ca3af' }],
   },
   {
     featureType: 'road.highway',
     elementType: 'geometry',
-    stylers: [{ color: '#475569' }],
+    stylers: [{ color: '#ffffff' }],
   },
   {
-    featureType: 'transit',
-    elementType: 'geometry',
-    stylers: [{ color: '#1e293b' }],
+    featureType: 'road.highway',
+    elementType: 'geometry.stroke',
+    stylers: [{ color: '#cbd5e1' }],
   },
+  // 4. Water - soft, pale blue
   {
     featureType: 'water',
     elementType: 'geometry',
-    stylers: [{ color: '#090d16' }],
+    stylers: [{ color: '#cadce8' }],
   },
   {
     featureType: 'water',
     elementType: 'labels.text.fill',
-    stylers: [{ color: '#475569' }],
+    stylers: [{ color: '#9ca3af' }],
+  },
+  {
+    featureType: 'administrative.land_parcel',
+    elementType: 'labels',
+    stylers: [{ visibility: 'off' }],
   },
 ];
 
@@ -70,12 +90,12 @@ const darkMapStyle = [
 const PIN_SVG_PATH =
   'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z';
 
-// SVG Icon Helpers
+// SVG Icon Helpers with brand color palette and white halo border
 const getStartMarkerIcon = () => ({
   path: PIN_SVG_PATH,
-  fillColor: '#10b981', // Emerald green
+  fillColor: '#EB5134', // Departure & Return: brand-red
   fillOpacity: 1,
-  strokeWeight: 2,
+  strokeWeight: 2.5,
   strokeColor: '#ffffff',
   scale: 1.6,
   anchor: { x: 12, y: 22 },
@@ -83,9 +103,9 @@ const getStartMarkerIcon = () => ({
 
 const getRestaurantMarkerIcon = () => ({
   path: PIN_SVG_PATH,
-  fillColor: '#f59e0b', // Amber / Orange
+  fillColor: '#F4A222', // Dining: brand-yellow
   fillOpacity: 1,
-  strokeWeight: 2,
+  strokeWeight: 2.5,
   strokeColor: '#ffffff',
   scale: 1.6,
   anchor: { x: 12, y: 22 },
@@ -93,15 +113,15 @@ const getRestaurantMarkerIcon = () => ({
 
 const getAttractionMarkerIcon = () => ({
   path: PIN_SVG_PATH,
-  fillColor: '#6366f1', // Indigo / Purple
+  fillColor: '#084A79', // Attractions: brand-navy
   fillOpacity: 1,
-  strokeWeight: 2,
+  strokeWeight: 2.5,
   strokeColor: '#ffffff',
   scale: 1.6,
   anchor: { x: 12, y: 22 },
 });
 
-export default function Map({
+function Map({
   startLocation,
   places = [],
   polyline = '',
@@ -140,17 +160,24 @@ export default function Map({
   // Automatically adjust bounds to fit all markers
   const fitAllBounds = useCallback(() => {
     if (!map || !window.google) return;
+
+    if ((!places || places.length === 0) && startLocation?.lat && startLocation?.lng) {
+      map.panTo({ lat: Number(startLocation.lat), lng: Number(startLocation.lng) });
+      map.setZoom(13);
+      return;
+    }
+
     const bounds = new window.google.maps.LatLngBounds();
 
     let hasPoints = false;
     if (startLocation?.lat && startLocation?.lng) {
-      bounds.extend({ lat: startLocation.lat, lng: startLocation.lng });
+      bounds.extend({ lat: Number(startLocation.lat), lng: Number(startLocation.lng) });
       hasPoints = true;
     }
 
     places.forEach((p) => {
       if (p.lat && p.lng) {
-        bounds.extend({ lat: p.lat, lng: p.lng });
+        bounds.extend({ lat: Number(p.lat), lng: Number(p.lng) });
         hasPoints = true;
       }
     });
@@ -170,6 +197,13 @@ export default function Map({
     fitAllBounds();
   }, [fitAllBounds]);
 
+  // Clear attraction popup if stops are cleared
+  useEffect(() => {
+    if (selectedMarker && selectedMarker.type !== 'start' && (!places || places.length === 0)) {
+      setSelectedMarker(null);
+    }
+  }, [places, selectedMarker]);
+
   const onMapLoad = useCallback((mapInstance) => {
     setMap(mapInstance);
   }, []);
@@ -180,13 +214,13 @@ export default function Map({
 
   if (loadError) {
     return (
-      <div className="w-full h-full min-h-[520px] bg-slate-900 border border-slate-800 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-12 h-12 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mb-3">
+      <div className="w-full h-full min-h-[380px] bg-white border border-brand-navy/15 rounded-2xl flex flex-col items-center justify-center p-6 text-center shadow-sm">
+        <div className="w-12 h-12 rounded-full bg-brand-red/10 text-brand-red flex items-center justify-center mb-3">
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
         </div>
-        <p className="text-slate-300 font-semibold">Unable to load Google Maps</p>
+        <p className="text-brand-navy font-semibold">Unable to load Google Maps</p>
         <p className="text-slate-500 text-xs mt-1">Please verify your VITE_GOOGLE_MAPS_API_KEY.</p>
       </div>
     );
@@ -194,28 +228,28 @@ export default function Map({
 
   if (!isLoaded) {
     return (
-      <div className="w-full h-full min-h-[520px] bg-slate-900/60 border border-slate-800 rounded-2xl flex flex-col items-center justify-center p-6 animate-pulse">
-        <div className="w-10 h-10 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3"></div>
-        <span className="text-sm text-slate-400">Loading Map Environment...</span>
+      <div className="w-full h-full min-h-[380px] bg-white border border-brand-navy/15 rounded-2xl flex flex-col items-center justify-center p-6 animate-pulse shadow-sm">
+        <div className="w-10 h-10 border-2 border-brand-teal border-t-transparent rounded-full animate-spin mb-3"></div>
+        <span className="text-sm text-brand-navy font-medium">Loading Map Environment...</span>
       </div>
     );
   }
 
   return (
-    <div className="relative w-full h-full min-h-[520px] rounded-2xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-950">
+    <div className="relative w-full h-full min-h-[380px] rounded-2xl overflow-hidden border border-brand-navy/15 shadow-sm bg-brand-cream">
       {/* Map Legend Floating Overlay */}
-      <div className="absolute top-3 left-3 z-10 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-xl px-3.5 py-2 text-xs flex items-center space-x-3.5 shadow-lg">
+      <div className="absolute top-3 left-3 z-10 bg-white/90 backdrop-blur-md border border-brand-navy/15 rounded-xl px-3.5 py-2 text-xs flex items-center space-x-3.5 shadow-sm">
         <div className="flex items-center space-x-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-          <span className="text-slate-300 text-[11px] font-medium">Departure & Return</span>
+          <span className="w-2.5 h-2.5 rounded-full bg-[#EB5134]"></span>
+          <span className="text-brand-navy text-[11px] font-semibold">Departure</span>
         </div>
         <div className="flex items-center space-x-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-          <span className="text-slate-300 text-[11px] font-medium">Curated Dining</span>
+          <span className="w-2.5 h-2.5 rounded-full bg-[#F4A222]"></span>
+          <span className="text-brand-navy text-[11px] font-semibold">Dining</span>
         </div>
         <div className="flex items-center space-x-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
-          <span className="text-slate-300 text-[11px] font-medium">Attractions</span>
+          <span className="w-2.5 h-2.5 rounded-full bg-[#084A79]"></span>
+          <span className="text-brand-navy text-[11px] font-semibold">Attractions</span>
         </div>
       </div>
 
@@ -226,7 +260,7 @@ export default function Map({
         onLoad={onMapLoad}
         onUnmount={onMapUnmount}
         options={{
-          styles: darkMapStyle,
+          styles: lightMapStyle,
           disableDefaultUI: false,
           zoomControl: true,
           streetViewControl: false,
@@ -240,6 +274,7 @@ export default function Map({
             position={{ lat: startLocation.lat, lng: startLocation.lng }}
             icon={getStartMarkerIcon()}
             title="Departure & Return Point"
+            zIndex={100}
             onClick={() =>
               setSelectedMarker({
                 name: startLocation.address || 'Departure Location',
@@ -261,6 +296,7 @@ export default function Map({
               position={{ lat: place.lat, lng: place.lng }}
               icon={isRestaurant ? getRestaurantMarkerIcon() : getAttractionMarkerIcon()}
               title={`Stop ${idx + 1}: ${place.name} (${isRestaurant ? (place.meal_type || 'Dining') : 'Attraction'})`}
+              zIndex={50}
               onClick={() => setSelectedMarker({ ...place, stop_number: idx + 1, isRestaurant })}
             />
           );
@@ -271,9 +307,9 @@ export default function Map({
           <PolylineF
             path={polylinePath}
             options={{
-              strokeColor: '#6366f1',
-              strokeOpacity: 0.9,
-              strokeWeight: 5,
+              strokeColor: '#10857E',
+              strokeOpacity: 0.85,
+              strokeWeight: 6,
             }}
           />
         )}
@@ -289,10 +325,10 @@ export default function Map({
                 <span
                   className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
                     selectedMarker.isRestaurant || selectedMarker.type === 'restaurant' || selectedMarker.meal_type
-                      ? 'bg-amber-100 text-amber-800'
+                      ? 'bg-amber-100 text-amber-900 border border-amber-200'
                       : selectedMarker.type === 'start'
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : 'bg-indigo-100 text-indigo-800'
+                      ? 'bg-red-100 text-brand-red border border-red-200'
+                      : 'bg-sky-100 text-brand-navy border border-sky-200'
                   }`}
                 >
                   {selectedMarker.stop_number ? `Stop ${selectedMarker.stop_number} • ` : ''}
@@ -317,13 +353,13 @@ export default function Map({
 
               {selectedMarker.rating && (
                 <p className="text-xs text-amber-600 font-semibold mt-1 flex items-center space-x-1">
-                  <span>★</span>
+                  <span className="text-brand-yellow">★</span>
                   <span>{Number(selectedMarker.rating).toFixed(1)} / 5.0</span>
                 </p>
               )}
 
               {(selectedMarker.visit_duration || selectedMarker.visit_duration_minutes || selectedMarker.duration_mins) && (
-                <p className="text-xs text-indigo-700 font-semibold mt-0.5">
+                <p className="text-xs text-brand-navy font-semibold mt-0.5">
                   ⏱️ {selectedMarker.meal_type ? 'Meal Duration' : 'Visit Duration'}: {selectedMarker.visit_duration || selectedMarker.visit_duration_minutes || selectedMarker.duration_mins} mins
                 </p>
               )}
@@ -353,3 +389,5 @@ export default function Map({
     </div>
   );
 }
+
+export default React.memo(Map);

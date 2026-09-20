@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { useJsApiLoader } from '@react-google-maps/api';
 import SearchForm from './components/SearchForm';
@@ -28,6 +28,33 @@ const LOADING_MESSAGES = [
   },
 ];
 
+function LoadingCard() {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setIndex((prev) => (prev + 1) % LOADING_MESSAGES.length);
+    }, 2200);
+    return () => clearInterval(interval);
+  }, []);
+
+  const msg = LOADING_MESSAGES[index];
+
+  return (
+    <div className="p-4 sm:p-5 rounded-3xl bg-white border border-brand-teal/30 flex items-center space-x-3.5 shadow-xl transition-all duration-300">
+      <div className="w-5 h-5 border-2 border-brand-teal border-t-transparent rounded-full animate-spin shrink-0"></div>
+      <div className="text-xs min-w-0">
+        <p className="font-bold text-brand-navy text-sm transition-all duration-300">
+          {msg.title}
+        </p>
+        <p className="text-brand-navy/70 mt-0.5 font-medium transition-all duration-300">
+          {msg.subtitle}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [backendHealth, setBackendHealth] = useState({ status: 'loading', message: 'Checking API...' });
   const [startLocation, setStartLocation] = useState({
@@ -37,7 +64,6 @@ function App() {
   });
   const [routeResult, setRouteResult] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
   const [errorMessage, setErrorMessage] = useState(null);
 
   // Single shared Google Maps API loader for the application
@@ -46,20 +72,6 @@ function App() {
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '',
     libraries: GOOGLE_MAPS_LIBRARIES,
   });
-
-  // Cycle through intelligent loading messages while curating
-  useEffect(() => {
-    let interval = null;
-    if (isLoading) {
-      setLoadingMessageIndex(0);
-      interval = setInterval(() => {
-        setLoadingMessageIndex((prev) => (prev + 1) % LOADING_MESSAGES.length);
-      }, 2200);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [isLoading]);
 
   useEffect(() => {
     axios.get(`${API_BASE_URL}/api/health`)
@@ -71,15 +83,19 @@ function App() {
       });
   }, []);
 
-  const handleLocationChange = (loc) => {
-    setStartLocation(loc);
-    // Clear any previous error when user picks new location
+  const handleLocationChange = useCallback((loc) => {
+    if (loc) {
+      setStartLocation(loc);
+    }
+    // Clear any previous error and reset previous route when location updates
     setErrorMessage(null);
-  };
+    setRouteResult(null);
+  }, []);
 
-  const handleGenerateRoute = async (formData) => {
+  const handleGenerateRoute = useCallback(async (formData) => {
     setIsLoading(true);
     setErrorMessage(null);
+    setRouteResult(null);
 
     const {
       start_location,
@@ -130,7 +146,7 @@ function App() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   const places = routeResult?.optimized_places || routeResult?.trip?.stops || [];
   const legs = routeResult?.legs || [];
@@ -138,32 +154,36 @@ function App() {
   const totalTripTime = routeResult?.total_trip_time || '';
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+    <div className="min-h-screen bg-brand-cream text-brand-navy flex flex-col font-sans selection:bg-brand-teal selection:text-white">
       {/* Top Navigation Bar */}
-      <header className="border-b border-slate-800/80 bg-slate-900/70 backdrop-blur-md sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <header className="border-b border-brand-navy/10 bg-white/95 backdrop-blur-md sticky top-0 z-30 shadow-sm py-3 sm:py-3.5">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20 shrink-0">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-              </svg>
-            </div>
-            <div>
-              <span className="text-lg font-bold text-white tracking-tight">Routi</span>
-              <span className="hidden sm:inline-block ml-2.5 text-xs px-2.5 py-0.5 rounded-full bg-indigo-950/60 text-indigo-300 border border-indigo-800/40 font-medium">
+            <img
+              src="/logo.png"
+              alt="Routi Logo"
+              className="h-9 w-9 sm:h-10 sm:w-10 object-contain shrink-0"
+              onError={(e) => {
+                e.target.onerror = null;
+                e.target.src = '/routi-logo.png';
+              }}
+            />
+            <div className="flex items-center">
+              <span className="text-xl sm:text-2xl font-black text-brand-navy tracking-tight leading-none">Routi</span>
+              <span className="hidden sm:inline-block ml-2.5 text-xs px-2.5 py-0.5 rounded-full bg-brand-navy/10 text-brand-navy border border-brand-navy/20 font-bold">
                 Day Trip Studio
               </span>
             </div>
           </div>
 
           <div className="flex items-center space-x-3">
-            <div className="flex items-center space-x-2 bg-slate-900/90 border border-slate-800/90 py-1.5 px-3.5 rounded-full shadow-sm">
+            <div className="flex items-center space-x-2 bg-brand-cream/80 border border-brand-navy/15 py-1.5 px-3.5 rounded-full shadow-sm">
               <div
                 className={`h-2 w-2 rounded-full ${
-                  backendHealth.status === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+                  backendHealth.status === 'connected' ? 'bg-brand-teal animate-pulse' : 'bg-brand-yellow'
                 }`}
               ></div>
-              <span className="text-xs font-medium text-slate-300">
+              <span className="text-xs font-bold text-brand-navy">
                 {backendHealth.status === 'connected' ? 'Live Routing Active' : 'Connecting Engine...'}
               </span>
             </div>
@@ -202,25 +222,10 @@ function App() {
               onSubmit={handleGenerateRoute}
               onLocationChange={handleLocationChange}
               isLoading={isLoading}
-              loadingMessage={LOADING_MESSAGES[loadingMessageIndex].title}
-              isLoaded={isLoaded}
-              loadError={loadError}
             />
 
             {/* Loading Indicator Card */}
-            {isLoading && (
-              <div className="p-4 sm:p-5 rounded-3xl bg-indigo-950/50 border border-indigo-500/40 flex items-center space-x-3.5 shadow-xl transition-all duration-300">
-                <div className="w-5 h-5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin shrink-0"></div>
-                <div className="text-xs min-w-0">
-                  <p className="font-bold text-indigo-200 text-sm transition-all duration-300">
-                    {LOADING_MESSAGES[loadingMessageIndex].title}
-                  </p>
-                  <p className="text-indigo-300/80 mt-0.5 font-medium transition-all duration-300">
-                    {LOADING_MESSAGES[loadingMessageIndex].subtitle}
-                  </p>
-                </div>
-              </div>
-            )}
+            {isLoading && <LoadingCard />}
 
             {/* Timeline: Rendered below form once route is generated */}
             {routeResult && !isLoading && (

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Star, Clock, Car, Utensils } from 'lucide-react';
 
 /**
  * Universal Google Maps Directions URL generator
@@ -26,96 +27,6 @@ export function buildUniversalGoogleMapsUrl(startLocation, places = [], travelmo
   return url;
 }
 
-/**
- * Category styling and icons helper
- */
-function getCategoryMeta(category = '', mealType = null) {
-  const cat = (category || '').toLowerCase();
-  if (mealType || cat.includes('restaurant') || cat.includes('dining') || cat.includes('food')) {
-    const meal = mealType ? mealType.charAt(0).toUpperCase() + mealType.slice(1).toLowerCase() : 'Dining';
-    return {
-      icon: '🍽️',
-      name: mealType ? meal : 'Dining',
-      colorBg: 'bg-amber-500/20',
-      colorBorder: 'border-amber-400',
-      colorText: 'text-amber-400',
-      colorDot: 'bg-amber-400',
-      cardBg: 'bg-amber-950/15 hover:bg-amber-950/25 border-amber-800/40',
-      badgeBg: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
-    };
-  }
-  if (cat.includes('cafe') || cat.includes('coffee') || cat.includes('bakery')) {
-    return {
-      icon: '☕',
-      name: 'Cafe',
-      colorBg: 'bg-orange-500/20',
-      colorBorder: 'border-orange-400',
-      colorText: 'text-orange-400',
-      colorDot: 'bg-orange-400',
-      cardBg: 'bg-orange-950/15 hover:bg-orange-950/25 border-orange-800/40',
-      badgeBg: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
-    };
-  }
-  if (cat.includes('lake') || cat.includes('water') || cat.includes('beach')) {
-    return {
-      icon: '🌳',
-      name: cat.includes('lake') ? 'Lake' : 'Waterfront',
-      colorBg: 'bg-cyan-500/20',
-      colorBorder: 'border-cyan-400',
-      colorText: 'text-cyan-400',
-      colorDot: 'bg-cyan-400',
-      cardBg: 'bg-cyan-950/15 hover:bg-cyan-950/25 border-cyan-800/40',
-      badgeBg: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
-    };
-  }
-  if (cat.includes('park') || cat.includes('nature') || cat.includes('garden')) {
-    return {
-      icon: '🌳',
-      name: 'Park',
-      colorBg: 'bg-emerald-500/20',
-      colorBorder: 'border-emerald-400',
-      colorText: 'text-emerald-400',
-      colorDot: 'bg-emerald-400',
-      cardBg: 'bg-emerald-950/15 hover:bg-emerald-950/25 border-emerald-800/40',
-      badgeBg: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
-    };
-  }
-  if (cat.includes('viewpoint') || cat.includes('scenic') || cat.includes('lookout')) {
-    return {
-      icon: '🌄',
-      name: 'Viewpoint',
-      colorBg: 'bg-sky-500/20',
-      colorBorder: 'border-sky-400',
-      colorText: 'text-sky-400',
-      colorDot: 'bg-sky-400',
-      cardBg: 'bg-sky-950/15 hover:bg-sky-950/25 border-sky-800/40',
-      badgeBg: 'bg-sky-500/20 text-sky-300 border-sky-500/30',
-    };
-  }
-  if (cat.includes('museum') || cat.includes('art') || cat.includes('history') || cat.includes('gallery')) {
-    return {
-      icon: '🏛️',
-      name: 'Museum',
-      colorBg: 'bg-purple-500/20',
-      colorBorder: 'border-purple-400',
-      colorText: 'text-purple-400',
-      colorDot: 'bg-purple-400',
-      cardBg: 'bg-purple-950/15 hover:bg-purple-950/25 border-purple-800/40',
-      badgeBg: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
-    };
-  }
-  return {
-    icon: '🏛️',
-    name: 'Attraction',
-    colorBg: 'bg-indigo-500/20',
-    colorBorder: 'border-indigo-400',
-    colorText: 'text-indigo-400',
-    colorDot: 'bg-indigo-400',
-    cardBg: 'bg-slate-800/50 hover:bg-slate-800/80 border-slate-700/60',
-    badgeBg: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30',
-  };
-}
-
 const formatMinutesToHours = (mins) => {
   if (!mins || mins <= 0) return '0m';
   const h = Math.floor(mins / 60);
@@ -124,6 +35,29 @@ const formatMinutesToHours = (mins) => {
   if (h > 0) return `${h}h`;
   return `${m}m`;
 };
+
+/**
+ * Replace snake_case or raw strings with clean Title Case
+ */
+function formatCategory(category = '') {
+  if (!category) return '';
+  return String(category)
+    .replace(/_/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+/**
+ * Simplify verbose price string (e.g. "$$ (Moderate)" -> "$$")
+ */
+function formatPrice(price = '') {
+  if (!price) return '';
+  const match = String(price).match(/^(\$+)/);
+  if (match) return match[1];
+  return String(price).split('(')[0].trim();
+}
 
 export default function Timeline({
   startLocation,
@@ -150,20 +84,8 @@ export default function Timeline({
   const travelMins = tAct.travel_minutes ?? totalTravelMins;
   const visitMins = tAct.visit_minutes ?? totalDwellMins;
   const actualElapsedMins = tAct.actual_elapsed_minutes ?? (travelMins + visitMins);
-  const bufferMins = tAct.safety_buffer_minutes ?? (safetyBufferMins || 0);
-  const planningBudgetMins = tAct.planning_budget_minutes ?? (actualElapsedMins + bufferMins);
-  const availableMins = tAct.available_minutes ?? 0;
-  const unusedMins = tAct.unused_minutes ?? (availableMins > planningBudgetMins ? availableMins - planningBudgetMins : 0);
-  const unusedAvailableMins = tAct.unused_available_minutes ?? (availableMins > actualElapsedMins ? availableMins - actualElapsedMins : 0);
-  const windowStart = tAct.available_window_start || startTime;
-  const windowEnd = tAct.available_window_end || '';
-  const utilizationPct = availableMins > 0 ? Math.min(100, Math.round((planningBudgetMins / availableMins) * 1000) / 10) : 0;
-  const diningCount = places.filter((p) => p.is_meal_stop || p.type === 'restaurant' || !!p.meal_type).length;
+  const totalDisplayTime = formatMinutesToHours(actualElapsedMins || totalDurationMins) || totalTripTime || '—';
 
-  const formattedActualElapsed = formatMinutesToHours(actualElapsedMins);
-  const formattedPlanningBudget = formatMinutesToHours(planningBudgetMins);
-  const formattedUnusedAvailable = formatMinutesToHours(unusedAvailableMins || unusedMins);
-  const formattedAvailableTotal = availableMins > 0 ? formatMinutesToHours(availableMins) : '';
   const [showRejected, setShowRejected] = useState(false);
   const startAddress = startLocation?.address || startLocation?.name || 'Starting Point';
 
@@ -177,240 +99,49 @@ export default function Timeline({
   };
 
   return (
-    <div className="bg-slate-900/90 border border-slate-800/90 rounded-3xl p-5 sm:p-7 shadow-2xl backdrop-blur-xl">
-      {/* Header & Planning Pillars */}
-      <div className="pb-5 border-b border-slate-800/80 mb-5 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-bold text-white tracking-tight">Optimized Day Itinerary</h3>
-            <p className="text-xs text-slate-400 font-medium mt-0.5">
-              Deterministic round-trip loop • Verified travel legs & category visit times
-            </p>
-          </div>
-
-          {/* Distinguished Timing Badges */}
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="bg-slate-800/90 border border-slate-700/70 text-slate-200 px-2.5 py-1 rounded-xl flex items-center space-x-1" title="Trip departure clock">
-              <span>🕐</span>
-              <span className="text-slate-400 font-medium">Start</span>
-            </span>
-            <span className="bg-slate-800/90 border border-slate-700/70 text-slate-200 px-2.5 py-1 rounded-xl flex items-center space-x-1" title="Total transit on road">
-              <span>🚗</span>
-              <span className="text-slate-400 font-medium">Travel</span>
-            </span>
-            <span className="bg-slate-800/90 border border-slate-700/70 text-slate-200 px-2.5 py-1 rounded-xl flex items-center space-x-1" title="Destination dwell and meal time">
-              <span>📍</span>
-              <span className="text-slate-400 font-medium">Visits</span>
-            </span>
-            <span className="bg-indigo-950/80 border border-indigo-500/40 text-indigo-300 px-2.5 py-1 rounded-xl flex items-center space-x-1" title="Reserved travel uncertainty margin (isolated from activities)">
-              <span>🛡</span>
-              <span className="text-indigo-400 font-medium">Safety Buffer</span>
-            </span>
-            <span className="bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 px-2.5 py-1 rounded-xl flex items-center space-x-1" title="Return to start point">
-              <span>🏁</span>
-              <span className="text-emerald-400 font-medium">Return</span>
-            </span>
-          </div>
+    <div className="bg-white border border-gray-100 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
+      {/* Header & Minimalist Summary */}
+      <div className="space-y-2">
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-xl font-bold text-brand-navy tracking-tight">Your Itinerary</h3>
+          <span className="text-xs sm:text-sm text-gray-600 font-semibold">
+            Total Duration: {totalDisplayTime} • {places.length} {places.length === 1 ? 'Stop' : 'Stops'}
+          </span>
         </div>
 
-        {/* Narrative Day Flow Summary */}
+        {/* Narrative AI Story */}
         {narrative && (
-          <div className="mt-2 p-3 rounded-2xl bg-indigo-950/40 border border-indigo-500/20 text-xs text-indigo-200/90 leading-relaxed italic">
+          <p className="text-xs sm:text-sm text-brand-navy italic leading-relaxed pt-1">
             "{narrative}"
-          </div>
+          </p>
         )}
       </div>
 
-      {/* SUMMARY LEVEL: Strict Separation of Timing Components (Backend Single Source of Truth) */}
-      <div className="mb-6 p-4 sm:p-5 rounded-2xl bg-slate-950/95 border border-slate-800 shadow-xl space-y-4">
-        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
-          <span>Itinerary Time Accounting</span>
-          <span className="text-indigo-400 font-semibold">Backend Single Source of Truth</span>
-        </div>
+      {/* Full-width Sleek Google Maps Button at the Top */}
+      <button
+        id="open-google-maps-btn"
+        type="button"
+        onClick={handleOpenGoogleMaps}
+        className="w-full py-3.5 px-6 bg-brand-navy text-white hover:opacity-95 font-bold rounded-full shadow-md hover:shadow-lg transition duration-200 flex items-center justify-center space-x-2 text-sm cursor-pointer"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+        </svg>
+        <span>Open in Google Maps</span>
+      </button>
 
-        {/* Row 1: Primary Schedule Pillars */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-4 pb-3 border-b border-slate-800/80 text-center sm:text-left">
-          <div>
-            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1">
-              <span>🕐</span>
-              <span>Start:</span>
-            </div>
-            <div className="text-sm sm:text-base font-extrabold text-white mt-0.5 font-mono">
-              {startTime}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1" title="Physical arrival back at start: start_time + actual_elapsed_time">
-              <span>🏁</span>
-              <span>Actual Return:</span>
-            </div>
-            <div className="text-sm sm:text-base font-extrabold text-emerald-400 mt-0.5 font-mono">
-              {actualReturnTime}
-            </div>
-            <div className="text-[10px] text-slate-500 font-sans mt-0.5 hidden sm:block">
-              Physical return
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1" title="Sum of actual transit and visit dwell">
-              <span>⏱️</span>
-              <span>Actual Elapsed:</span>
-            </div>
-            <div className="text-sm sm:text-base font-extrabold text-cyan-300 mt-0.5 font-mono">
-              {formattedActualElapsed}
-            </div>
-            <div className="text-[10px] text-slate-500 font-mono mt-0.5 hidden sm:block">
-              {actualElapsedMins}m on trip
-            </div>
-          </div>
-        </div>
-
-        {/* Row 2: Duration Components (Strictly Separated) */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-4 pb-3 border-b border-slate-800/80 text-center sm:text-left">
-          <div>
-            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1" title="Sum of all actual travel legs">
-              <span>🚗</span>
-              <span>Travel:</span>
-            </div>
-            <div className="text-sm sm:text-base font-bold text-slate-200 mt-0.5 font-mono">
-              {travelMins}m
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1" title="Sum of all destination and meal visit durations">
-              <span>📍</span>
-              <span>Visits:</span>
-            </div>
-            <div className="text-sm sm:text-base font-bold text-slate-200 mt-0.5 font-mono">
-              {visitMins}m
-            </div>
-          </div>
-
-          <div title="Planning allowance for travel uncertainty; NOT counted as an activity">
-            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1">
-              <span>🛡</span>
-              <span>Safety Buffer:</span>
-            </div>
-            <div className="text-sm sm:text-base font-bold text-indigo-300 mt-0.5 font-mono">
-              {bufferMins}m
-            </div>
-          </div>
-        </div>
-
-        {/* Row 3: Planning Budget & Available Window Allocation */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-4 pt-1 text-center sm:text-left text-xs">
-          <div>
-            <div className="text-slate-400 font-medium" title="actual_elapsed_time + safety_buffer">
-              Planning Budget:
-            </div>
-            <div className="text-xs sm:text-sm font-bold text-indigo-300 mt-0.5 font-mono">
-              {formattedPlanningBudget} <span className="text-[10px] text-slate-500">({planningBudgetMins}m)</span>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-slate-400 font-medium" title="User provided available exploration window">
-              Available Window:
-            </div>
-            <div className="text-xs sm:text-sm font-semibold text-slate-300 mt-0.5 font-mono">
-              {windowEnd ? `${startTime} – ${windowEnd}` : (formattedAvailableTotal || '—')}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-slate-400 font-medium" title="Unused remaining exploration time in window">
-              Unused Available:
-            </div>
-            <div className="text-xs sm:text-sm font-bold text-emerald-400 mt-0.5 font-mono">
-              {formattedUnusedAvailable}
-            </div>
-          </div>
-        </div>
-
-        {/* Row 4: Route Performance & Diagnostics */}
-        <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
-          <div className="flex items-center space-x-2">
-            <span className="text-slate-400 font-medium">Time Utilization:</span>
-            <div className="flex items-center space-x-1.5">
-              <div className="w-16 sm:w-24 h-2 rounded-full bg-slate-800 overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 rounded-full transition-all duration-500"
-                  style={{ width: `${utilizationPct}%` }}
-                ></div>
-              </div>
-              <span className="font-extrabold text-emerald-400 font-mono text-xs">{utilizationPct}%</span>
-            </div>
-          </div>
-
-          <div className="flex items-center space-x-2 text-[11px] font-medium text-slate-300">
-            <span className="bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800">
-              📍 <strong className="text-white">{places.length}</strong> {places.length === 1 ? 'Stop' : 'Stops'}
-            </span>
-            {diningCount > 0 && (
-              <span className="bg-amber-950/40 px-2 py-0.5 rounded-lg border border-amber-800/40 text-amber-300">
-                🍽️ <strong className="text-amber-200">{diningCount}</strong> {diningCount === 1 ? 'Dining stop' : 'Dining stops'}
-              </span>
-            )}
-            {routeScore !== null && routeScore !== undefined && (
-              <span className="bg-indigo-950/40 px-2 py-0.5 rounded-lg border border-indigo-800/40 text-indigo-300 font-mono">
-                ⭐ <strong className="text-indigo-200">{Number(routeScore).toFixed(1)}</strong> Score
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Navigation Export Banner */}
-      <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-slate-800/90 via-slate-800/70 to-indigo-950/40 border border-indigo-500/25 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg">
-        <div className="flex items-center space-x-3 w-full sm:w-auto">
-          <div className="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 shrink-0">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-            </svg>
-          </div>
-          <div>
-            <h4 className="text-xs font-bold text-white uppercase tracking-wider">Turn-by-Turn Navigation</h4>
-            <p className="text-[11px] text-slate-400">Export sequenced loop itinerary to Google Maps</p>
-          </div>
-        </div>
-
-        <button
-          id="open-google-maps-btn"
-          type="button"
-          onClick={handleOpenGoogleMaps}
-          className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-500/20 flex items-center justify-center space-x-1.5 transition duration-200 cursor-pointer"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-          </svg>
-          <span>Open in Google Maps</span>
-        </button>
-      </div>
-
-      {/* SEQUENTIAL ITINERARY TIMELINE */}
-      <div className="relative border-l-2 border-indigo-500/30 ml-4 sm:ml-5 space-y-4 pl-6 sm:pl-7">
+      {/* Clean Timeline Flow with Subtle Cool Gray Track */}
+      <div className="relative border-l-2 border-gray-200 ml-3.5 pl-6 pt-2 space-y-6">
         
         {/* START NODE */}
-        <div className="relative group">
-          <span className="absolute -left-[31px] sm:-left-[35px] top-1 w-5 h-5 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-          </span>
-
-          <div className="bg-slate-800/50 hover:bg-slate-800/80 border border-slate-700/60 rounded-2xl p-4 transition shadow-sm">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5 font-mono">
-                <span>{startClock || '09:30 AM'} — Start</span>
-              </span>
-              <span className="text-[10px] font-bold text-emerald-400/80 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
-                Origin
-              </span>
-            </div>
-            <h4 className="text-sm font-bold text-white">Depart from {startAddress}</h4>
-            <p className="text-xs text-slate-400 mt-0.5">Begin your round-trip journey from your chosen departure location.</p>
+        <div className="relative">
+          <div className="relative flex items-center text-xs font-bold tracking-widest text-brand-teal uppercase mb-1">
+            <div className="absolute -left-[31px] w-3 h-3 rounded-full bg-white border-[2.5px] border-brand-navy z-10" />
+            <span>{startTime}</span>
           </div>
+          <h4 className="text-base font-semibold text-brand-navy">
+            Depart from {startAddress}
+          </h4>
         </div>
 
         {/* DESTINATIONS & TRANSIT LEGS */}
@@ -419,236 +150,183 @@ export default function Timeline({
           const prevTravelMins = place.travel_time_from_previous || (leg ? parseInt(leg.duration_text) : 15);
           const travelDistanceText = leg ? leg.distance_text : '';
           const isRestaurant = place.is_meal_stop || place.type === 'restaurant' || !!place.meal_type;
-          const meta = getCategoryMeta(place.category || place.type, place.meal_type);
-          const stopNumber = idx + 1;
           const visitDurationMins = place.visit_duration || place.visit_duration_minutes || place.duration_mins || 45;
 
-          // Sequential leg timing: previous departure to current arrival
-          const prevDepartureTime = idx === 0 ? (startClock || '09:30 AM') : (places[idx - 1]?.departure_time || '');
-          const currentArrivalTime = place.arrival_time || '';
-          const legTimeWindow = prevDepartureTime && currentArrivalTime ? `${prevDepartureTime}–${currentArrivalTime}` : '';
+          // Assemble human-readable metadata components
+          const metadataItems = [];
+
+          if (visitDurationMins) {
+            metadataItems.push(
+              <span key="duration" className="inline-flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                <span>{visitDurationMins} mins</span>
+              </span>
+            );
+          }
+
+          if (place.rating) {
+            metadataItems.push(
+              <span key="rating" className="inline-flex items-center gap-1">
+                <Star className="w-3.5 h-3.5 text-brand-yellow fill-brand-yellow shrink-0" />
+                <span className="font-semibold text-gray-700">{Number(place.rating).toFixed(1)}</span>
+              </span>
+            );
+          }
+
+          const priceFormatted = formatPrice(place.price_level || place.price);
+          if (priceFormatted) {
+            metadataItems.push(
+              <span key="price" className="font-semibold text-gray-700">
+                {priceFormatted}
+              </span>
+            );
+          }
+
+          const rawCategory = isRestaurant
+            ? (place.meal_type || place.cuisine || 'Dining')
+            : (place.category || place.type || 'Sight');
+          const categoryFormatted = formatCategory(rawCategory);
+
+          if (categoryFormatted) {
+            metadataItems.push(
+              <span key="category">{categoryFormatted}</span>
+            );
+          }
+
+          const selectionReason =
+            (place.selection_reasons && place.selection_reasons.length > 0)
+              ? place.selection_reasons.join(' • ')
+              : place.reason || place.ai_reasoning;
 
           return (
             <React.Fragment key={place.place_id || place.id || `stop-${idx}`}>
-              {/* TRANSIT LEG CONNECTOR */}
-              <div className="relative py-1">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-slate-300 bg-slate-950/90 border border-slate-800/90 py-2 px-3.5 rounded-xl shadow-sm">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm">🚗</span>
-                    <span className="font-bold text-slate-200">Travel · {prevTravelMins} mins</span>
-                    {travelDistanceText && <span className="text-slate-500">• {travelDistanceText}</span>}
-                  </div>
-                  {legTimeWindow && (
-                    <span className="text-[11px] font-semibold text-indigo-300 font-mono bg-indigo-950/60 border border-indigo-500/30 px-2 py-0.5 rounded-md">
-                      {legTimeWindow}
-                    </span>
-                  )}
+              {/* TRAVEL TRANSITION PILL */}
+              <div className="my-2 -ml-2">
+                <div className="inline-flex items-center gap-2 bg-white border border-gray-100 shadow-sm rounded-full px-3 py-1 text-xs text-gray-500">
+                  <Car className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                  <span>{prevTravelMins} mins travel</span>
+                  {travelDistanceText && <span className="text-gray-300">•</span>}
+                  {travelDistanceText && <span>{travelDistanceText}</span>}
                 </div>
               </div>
 
-              {/* DESTINATION / RESTAURANT CARD */}
-              <div className="relative group">
-                <span
-                  className={`absolute -left-[31px] sm:-left-[35px] top-2 w-5 h-5 rounded-full border-2 flex items-center justify-center ${meta.colorBg} ${meta.colorBorder}`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-full ${meta.colorDot}`}></span>
-                </span>
-
-                <div className={`border rounded-2xl p-4 transition shadow-sm ${meta.cardBg}`}>
-                  {/* Top Bar: Stop number, Category / Meal badge, and Arrival–Departure */}
-                  <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-xs font-extrabold text-slate-300 bg-slate-900/90 px-2.5 py-0.5 rounded-md border border-slate-700/60">
-                        Stop {stopNumber}
-                      </span>
-
-                      {/* Explicit Distinction for Restaurants vs Other Destinations */}
-                      {isRestaurant ? (
-                        <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-500/25 text-amber-300 font-bold border border-amber-500/40 uppercase tracking-wide flex items-center space-x-1">
-                          <span>🍽️</span>
-                          <span>{place.meal_type || 'Lunch'}</span>
-                        </span>
-                      ) : (
-                        <span className={`text-xs font-bold uppercase tracking-wider ${meta.colorText} flex items-center space-x-1`}>
-                          <span>{meta.icon}</span>
-                          <span>{meta.name}</span>
-                        </span>
-                      )}
-
-                      {place.cuisine && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 font-medium border border-amber-500/30">
-                          {place.cuisine}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Arrival - Departure Times */}
-                    {place.arrival_time && place.departure_time && (
-                      <div className="text-xs font-bold text-slate-200 bg-slate-900/90 px-2.5 py-1 rounded-lg border border-slate-700/60 flex items-center space-x-1 font-mono">
-                        <span>🕐</span>
-                        <span>{place.arrival_time} – {place.departure_time}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Destination Name */}
-                  <h4 className="text-base font-bold text-white tracking-tight leading-snug">
-                    {place.name}
-                  </h4>
-
-                  {/* Destination Attributes: Duration, Rating, Category, Travel from Prior */}
-                  <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
-                    {isRestaurant ? (
-                      <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl bg-amber-950/70 border border-amber-500/40 text-amber-300 font-semibold shadow-sm">
-                        <span>🍽️</span>
-                        <span>Meal Duration: {visitDurationMins} mins</span>
-                      </div>
-                    ) : (
-                      <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl bg-indigo-950/70 border border-indigo-500/40 text-indigo-300 font-semibold shadow-sm">
-                        <span>📍</span>
-                        <span>Visit Duration: {visitDurationMins} mins</span>
-                      </div>
-                    )}
-
-                    {place.rating && (
-                      <span className="text-amber-400 font-bold flex items-center space-x-1 bg-slate-800/80 border border-slate-700/60 px-2.5 py-1 rounded-lg">
-                        <span>★</span>
-                        <span>{Number(place.rating).toFixed(1)}</span>
-                      </span>
-                    )}
-
-                    <span className="text-slate-300 bg-slate-800/80 border border-slate-700/60 px-2.5 py-1 rounded-lg font-medium">
-                      {place.category || meta.name}
+              {/* DESTINATION NODE */}
+              <div className="relative">
+                <div className="space-y-1">
+                  {/* Elegant Tracking-Wide Overline Time with Ring Center-Aligned */}
+                  <div className="relative flex items-center text-xs font-bold tracking-widest text-brand-teal uppercase mb-1">
+                    <div
+                      className={`absolute -left-[31px] w-3 h-3 rounded-full z-10 ${
+                        isRestaurant
+                          ? 'bg-[#FFF8EE] border-[2.5px] border-brand-yellow ring-2 ring-brand-yellow/20'
+                          : 'bg-white border-[2.5px] border-brand-navy'
+                      }`}
+                    />
+                    <span>
+                      {place.arrival_time && place.departure_time
+                        ? `${place.arrival_time} – ${place.departure_time}`
+                        : (place.arrival_time || startTime)}
                     </span>
+                  </div>
 
-                    {prevTravelMins > 0 && (
-                      <span className="text-slate-400 bg-slate-900/60 border border-slate-800 px-2.5 py-1 rounded-lg text-[11px]">
-                        🚗 Travel from prior: {prevTravelMins} mins
+                  {/* Destination Name with Dining Badge if Food Stop */}
+                  <div className="flex items-center flex-wrap gap-2">
+                    <h3 className="text-base font-semibold text-brand-navy tracking-tight leading-snug">
+                      {place.name}
+                    </h3>
+                    {isRestaurant && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-brand-yellow/15 text-amber-900 border border-brand-yellow/30">
+                        <Utensils className="w-3 h-3 text-brand-yellow shrink-0" />
+                        <span>{formatCategory(place.meal_type) || 'Dining'}</span>
                       </span>
                     )}
                   </div>
 
+                  {/* Refined Flexbox Metadata Row */}
+                  <div className="flex items-center flex-wrap gap-1.5 text-sm text-gray-500 mt-1">
+                    {metadataItems.map((item, itemIdx) => (
+                      <React.Fragment key={itemIdx}>
+                        {itemIdx > 0 && <span className="text-gray-300">•</span>}
+                        {item}
+                      </React.Fragment>
+                    ))}
+                  </div>
+
+                  {/* Receding Physical Address */}
                   {place.address && (
-                    <p className="text-slate-400 text-xs mt-2 truncate">
-                      📍 {place.address}
+                    <p className="text-xs text-gray-400 mt-0.5 truncate">
+                      {place.address}
                     </p>
                   )}
 
-                  {/* SELECTION REASON (Required for every destination) */}
-                  <div className="mt-3 pt-2.5 border-t border-slate-700/50 text-xs">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                      Selection Reason:
-                    </span>
-                    <p className="text-slate-200 leading-relaxed">
-                      {place.selection_reasons && place.selection_reasons.length > 0
-                        ? place.selection_reasons.join(' • ')
-                        : place.reason || place.ai_reasoning || 'Matches selected interests, optimal category pacing, and smooth route geometry.'}
-                    </p>
-                  </div>
+                  {/* AI Reasoning Soft Container Block */}
+                  {selectionReason && (
+                    <div className="mt-2.5 bg-slate-50 border border-slate-100 rounded-lg p-2.5 text-xs text-slate-600 italic flex items-start gap-2 leading-relaxed">
+                      <span className="shrink-0 text-brand-teal select-none not-italic text-xs">✨</span>
+                      <span>{selectionReason}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </React.Fragment>
           );
         })}
 
-        {/* RETURN TRANSIT LEG CONNECTOR */}
+        {/* RETURN TRANSIT LEG PILL */}
         {places.length > 0 && (
-          <div className="relative py-1">
-            {(() => {
-              const returnLeg = legs[places.length];
-              const lastStop = places[places.length - 1];
-              const returnTravelMins = returnLeg?.duration_mins || (returnLeg ? parseInt(returnLeg.duration_text) : 15);
-              const returnDistanceText = returnLeg ? returnLeg.distance_text : '';
-              const returnTimeWindow = lastStop?.departure_time && actualReturnTime && actualReturnTime !== '—' ? `${lastStop.departure_time}–${actualReturnTime}` : '';
+          (() => {
+            const returnLeg = legs[places.length];
+            const returnTravelMins = returnLeg?.duration_mins || (returnLeg ? parseInt(returnLeg.duration_text) : 15);
+            const returnDistanceText = returnLeg ? returnLeg.distance_text : '';
 
-              return (
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-slate-300 bg-slate-950/90 border border-slate-800/90 py-2 px-3.5 rounded-xl shadow-sm">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm">🚗</span>
-                    <span className="font-bold text-slate-200">Return · {returnTravelMins} mins</span>
-                    {returnDistanceText && <span className="text-slate-500">• {returnDistanceText}</span>}
-                  </div>
-                  {returnTimeWindow && (
-                    <span className="text-[11px] font-semibold text-emerald-300 font-mono bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-md">
-                      {returnTimeWindow}
-                    </span>
-                  )}
+            return (
+              <div className="my-2 -ml-2">
+                <div className="inline-flex items-center gap-2 bg-white border border-gray-100 shadow-sm rounded-full px-3 py-1 text-xs text-gray-500">
+                  <Car className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                  <span>{returnTravelMins} mins travel</span>
+                  {returnDistanceText && <span className="text-gray-300">•</span>}
+                  {returnDistanceText && <span>{returnDistanceText}</span>}
                 </div>
-              );
-            })()}
-          </div>
+              </div>
+            );
+          })()
         )}
 
-        {/* BACK AT START NODE */}
-        <div className="relative group">
-          <span className="absolute -left-[31px] sm:-left-[35px] top-1 w-5 h-5 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-          </span>
-
-          <div className="bg-slate-800/50 hover:bg-slate-800/80 border border-slate-700/60 rounded-2xl p-4 transition shadow-sm">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5 font-mono">
-                <span>🏁 {actualReturnTime} — Back at Start</span>
-              </span>
-              <span className="text-[10px] font-bold text-emerald-400/80 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
-                Round Trip Complete
-              </span>
-            </div>
-            <h4 className="text-sm font-bold text-white">Return to {startAddress}</h4>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Concluded in {formattedActualElapsed} of actual travel & visits (safety buffer: {bufferMins}m).
-            </p>
+        {/* RETURN NODE */}
+        <div className="relative">
+          <div className="relative flex items-center text-xs font-bold tracking-widest text-brand-teal uppercase mb-1">
+            <div className="absolute -left-[31px] w-3 h-3 rounded-full bg-white border-[2.5px] border-brand-navy z-10" />
+            <span>{actualReturnTime}</span>
           </div>
+          <h4 className="text-base font-semibold text-brand-navy">
+            Return to {startAddress}
+          </h4>
         </div>
 
       </div>
 
-      {/* Destination Alternatives & Tradeoffs */}
+      {/* Collapsible Candidate Alternatives (Minimalist) */}
       {rejectedDestinations && rejectedDestinations.length > 0 && (
-        <div className="mt-8 pt-5 border-t border-slate-800/80">
+        <div className="pt-4 border-t border-gray-100">
           <button
             type="button"
             onClick={() => setShowRejected(!showRejected)}
-            className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-slate-800/40 hover:bg-slate-800/70 border border-slate-700/60 text-xs text-slate-300 font-semibold transition cursor-pointer"
+            className="w-full flex items-center justify-between text-xs text-gray-500 hover:text-brand-navy transition cursor-pointer"
           >
-            <div className="flex items-center space-x-2">
-              <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span>Evaluated Candidates & Tradeoffs ({rejectedDestinations.length} considered)</span>
-            </div>
-            <span className="text-indigo-400 text-xs font-bold">
-              {showRejected ? 'Hide ▲' : 'Show ▼'}
-            </span>
+            <span>{rejectedDestinations.length} alternative places considered</span>
+            <span className="font-semibold">{showRejected ? 'Hide −' : 'View +'}</span>
           </button>
 
           {showRejected && (
-            <div className="mt-3 space-y-2 p-3.5 bg-slate-950/50 border border-slate-800/80 rounded-2xl animate-fadeIn">
-              <p className="text-[11px] text-slate-400 mb-2">
-                Scanned spots from your area that were omitted to respect your duration limit, transit efficiency, or meal window balance:
-              </p>
-              <div className="divide-y divide-slate-800/60">
-                {rejectedDestinations.map((cand, idx) => (
-                  <div key={`rej-${idx}`} className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-xs">
-                    <div>
-                      <span className="font-semibold text-slate-200">{cand.place}</span>
-                      <span className="ml-2 text-[10px] text-slate-400 uppercase tracking-wide">
-                        ({cand.category || 'venue'})
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {(cand.rejection_reasons || []).map((r, rIdx) => (
-                        <span
-                          key={`rr-${rIdx}`}
-                          className="text-[10px] px-2 py-0.5 rounded-md bg-rose-950/40 border border-rose-800/40 text-rose-300 font-medium"
-                        >
-                          {r}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+            <div className="mt-3 space-y-2 pt-2 divide-y divide-gray-100">
+              {rejectedDestinations.map((cand, idx) => (
+                <div key={`rej-${idx}`} className="pt-2 flex items-center justify-between text-xs">
+                  <span className="text-gray-600 font-medium">{cand.place}</span>
+                  <span className="text-[11px] text-gray-400">
+                    {(cand.rejection_reasons || []).join(', ')}
+                  </span>
+                </div>
+              ))}
             </div>
           )}
         </div>

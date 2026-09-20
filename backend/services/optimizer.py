@@ -28,6 +28,9 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple, Set
 from datetime import datetime, timedelta
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 from services.scorer import (
     ScoringConfig,
@@ -88,6 +91,7 @@ class ScheduledItineraryStop:
     meal_type: Optional[str] = None  # "breakfast", "lunch", "dinner", or None
     travel_time_from_previous: int = 0
     visit_duration: int = 45
+    is_locked: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         cat = "food" if self.meal_type or self.category in ["restaurant", "cafe", "dining", "bakery"] else self.category
@@ -100,6 +104,7 @@ class ScheduledItineraryStop:
             "category": cat,
             "meal_type": self.meal_type,
             "is_meal_stop": bool(self.meal_type),
+            "is_locked": self.is_locked,
             "lat": self.lat,
             "lng": self.lng,
             "coordinates": {"lat": self.lat, "lng": self.lng},
@@ -462,6 +467,24 @@ class MealPeriod:
     min_trip_overlap_mins: int  # minimum trip overlap to trigger meal eligibility
 
 
+def get_meal_type_for_arrival(arr_minute: int) -> Optional[str]:
+    """
+    Deterministically resolves meal type solely from the restaurant's actual arrival minute (0..1439).
+    Meal types are hard constraints:
+      - Breakfast: 07:00–10:30 (420 to 630 mins)
+      - Lunch:     11:30–15:00 (690 to 900 mins)
+      - Dinner:    18:00–21:30 (1080 to 1290 mins)
+    Outside these windows, returns None (No meal slot).
+    """
+    if 420 <= arr_minute <= 630:
+        return "breakfast"
+    elif 690 <= arr_minute <= 900:
+        return "lunch"
+    elif 1080 <= arr_minute <= 1290:
+        return "dinner"
+    return None
+
+
 DEFAULT_MEAL_PERIODS: Dict[str, MealPeriod] = {
     "breakfast": MealPeriod(
         name="breakfast",
@@ -471,27 +494,17 @@ DEFAULT_MEAL_PERIODS: Dict[str, MealPeriod] = {
         end_minute=10 * 60 + 30,     # 630
         default_dwell_mins=45,
         min_dwell_mins=30,
-        min_trip_overlap_mins=45
+        min_trip_overlap_mins=20
     ),
     "lunch": MealPeriod(
         name="lunch",
         start_time="11:30",
-        end_time="14:30",
+        end_time="15:00",
         start_minute=11 * 60 + 30,   # 690
-        end_minute=14 * 60 + 30,     # 870
+        end_minute=15 * 60,          # 900
         default_dwell_mins=60,
         min_dwell_mins=45,
-        min_trip_overlap_mins=45
-    ),
-    "afternoon_break": MealPeriod(
-        name="afternoon_break",
-        start_time="15:00",
-        end_time="17:30",
-        start_minute=15 * 60,        # 900
-        end_minute=17 * 60 + 30,     # 1050
-        default_dwell_mins=45,
-        min_dwell_mins=30,
-        min_trip_overlap_mins=30
+        min_trip_overlap_mins=20
     ),
     "dinner": MealPeriod(
         name="dinner",
@@ -501,7 +514,7 @@ DEFAULT_MEAL_PERIODS: Dict[str, MealPeriod] = {
         end_minute=21 * 60 + 30,     # 1290
         default_dwell_mins=75,
         min_dwell_mins=45,
-        min_trip_overlap_mins=45
+        min_trip_overlap_mins=20
     )
 }
 
@@ -612,6 +625,46 @@ def is_food_candidate(c_dict: Optional[Dict[str, Any]]) -> bool:
     if any(kw in name for kw in ["restaurant", "cafe", "coffee", "bistro", "dhaba", "bakery", "eatery", "rooftop cafe"]):
         return True
     return False
+
+
+def validate_itinerary_meal_times(
+    places: List[Dict[str, Any]],
+    start_time_clock: str = "09:30 AM"
+) -> List[Dict[str, Any]]:
+    if not places:
+        return places
+
+    start_dt = parse_clock_time(start_time_clock)
+    running_dt = start_dt
+
+    for p in places:
+        arr_str = p.get("arrival_time") or p.get("arrival_clock")
+        if arr_str:
+            arr_dt = parse_clock_time(str(arr_str))
+            arr_m = get_minute_of_day(arr_dt)
+        else:
+            t_prev = p.get("travel_time_from_previous") or p.get("transit_from_prev_mins") or 0
+            running_dt += timedelta(minutes=int(t_prev))
+            arr_m = get_minute_of_day(running_dt)
+            v_dur = p.get("visit_duration") or p.get("duration_mins") or 45
+            running_dt += timedelta(minutes=int(v_dur))
+
+        is_food = (
+            is_restaurant_venue(p)
+            or is_food_candidate(p)
+            or p.get("type") == "restaurant"
+            or str(p.get("category", "")).lower() in FOOD_CATEGORIES
+        )
+
+        if is_food:
+            valid_meal = get_meal_type_for_arrival(arr_m)
+            p["meal_type"] = valid_meal
+            p["is_meal_stop"] = bool(valid_meal)
+        else:
+            p["meal_type"] = None
+            p["is_meal_stop"] = False
+
+    return places
 
 
 def get_canonical_stop_category(stop: Dict[str, Any]) -> str:
@@ -725,9 +778,13 @@ def two_opt_optimize_loop(
             arr_dt = start_dt + timedelta(minutes=cur_elapsed)
             arr_m = get_minute_of_day(arr_dt)
             m_type = item.get("meal_type")
-            if m_type and m_type in DEFAULT_MEAL_PERIODS:
-                mp = DEFAULT_MEAL_PERIODS[m_type]
-                if not (mp.start_minute <= arr_m <= mp.end_minute):
+            if m_type:
+                # Hard constraint: The actual arrival minute MUST match the scheduled meal_type
+                if get_meal_type_for_arrival(arr_m) != m_type:
+                    return False
+            elif is_restaurant_venue(item) and not is_cafe_or_light_refreshment(item):
+                # Dedicated dining venue cannot be scheduled outside a valid meal window
+                if get_meal_type_for_arrival(arr_m) is None:
                     return False
             cur_elapsed += item.get("dwell_mins", 60)
             p_lat, p_lng, p_id = item["lat"], item["lng"], item.get("place_id")
@@ -1121,7 +1178,8 @@ class RouteOptimizer:
         selected_categories: Optional[List[str]] = None,
         allow_iconic_landmarks: bool = False,
         max_consecutive_same_category: int = 2,
-        route_scoring_config: Optional[RouteScoringConfig] = None
+        route_scoring_config: Optional[RouteScoringConfig] = None,
+        required_place_ids: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Executes the optimization algorithm adhering to all hard constraints
@@ -1184,6 +1242,7 @@ class RouteOptimizer:
         # -------------------------------------------------------------------
         # Step 0.5: Enforce deterministic hard category filtering
         # -------------------------------------------------------------------
+        req_pids = set(str(pid) for pid in (required_place_ids or []))
         explicit_category_set: Set[str] = set()
         raw_explicit = selected_categories or []
         if isinstance(raw_explicit, str):
@@ -1197,6 +1256,12 @@ class RouteOptimizer:
         if explicit_category_set:
             eligible_candidates: List[Dict[str, Any]] = []
             for c in unique_candidates:
+                c_pid = str(c.get("place_id") or "")
+                # Explicitly locked requested destinations always bypass category filters
+                if req_pids and c_pid in req_pids:
+                    eligible_candidates.append(c)
+                    continue
+
                 venue_cats = get_venue_canonical_categories(c)
                 is_cat_match = bool(venue_cats & explicit_category_set)
                 is_landmark_match = bool(allow_iconic_landmarks and (CATEGORY_LANDMARK in venue_cats or is_iconic_landmark(c)))
@@ -1210,6 +1275,14 @@ class RouteOptimizer:
                         "rejection_reasons": ["Ineligible category: outside user-selected categories"]
                     })
             unique_candidates = eligible_candidates
+
+        # Strip pre-assigned meal tags
+        clean_candidates = []
+        for c in unique_candidates:
+            c_copy = dict(c)
+            c_copy["meal_type"] = None
+            clean_candidates.append(c_copy)
+        unique_candidates = clean_candidates
 
         if not unique_candidates:
             return self._build_empty_itinerary(
@@ -1399,9 +1472,13 @@ class RouteOptimizer:
                 arr_dt = start_clock_dt + timedelta(minutes=cur_elapsed)
                 arr_m = get_minute_of_day(arr_dt)
                 m_type = item.get("meal_type")
-                if m_type and m_type in DEFAULT_MEAL_PERIODS:
-                    mp = DEFAULT_MEAL_PERIODS[m_type]
-                    if not (mp.start_minute <= arr_m <= mp.end_minute):
+                if m_type:
+                    # Hard constraint: The actual arrival minute MUST match the scheduled meal_type
+                    if get_meal_type_for_arrival(arr_m) != m_type:
+                        return False
+                elif is_restaurant_venue(item) and not is_cafe_or_light_refreshment(item):
+                    # Dedicated dining venue cannot be scheduled outside a valid meal window
+                    if get_meal_type_for_arrival(arr_m) is None:
                         return False
                 cur_elapsed += item.get("dwell_mins", 60)
                 p_lat, p_lng, p_id = item["lat"], item["lng"], item.get("place_id")
@@ -1418,25 +1495,19 @@ class RouteOptimizer:
 
             # 1. Expand dwell times if significantly under budget
             if total_span < max_activity_budget - 45:
-                slack_to_fill = max_activity_budget - total_span - 15
-                for p in tour_to_adjust:
-                    if slack_to_fill <= 0:
-                        break
-                    model = get_category_visit_duration(p, p.get("meal_type"))
-                    cur_d = p.get("dwell_mins", model.default_minutes)
-                    max_d = model.max_minutes
-                    expandable = max(0, max_d - cur_d)
-                    if expandable > 0:
-                        added = min(expandable, min(slack_to_fill, 30))
-                        snapped_added = int(round(added / 15.0) * 15)
-                        if snapped_added > 0:
-                            p["dwell_mins"] = cur_d + snapped_added
+                potential_expanders = [
+                    p for p in tour_to_adjust
+                    if not (is_restaurant_venue(p) and p.get("meal_type"))
+                ]
+                if potential_expanders:
+                    expand_budget = (max_activity_budget - 20) - total_span
+                    per_stop_add = int(expand_budget / len(potential_expanders))
+                    if per_stop_add >= 15:
+                        for p in potential_expanders:
+                            cur_d = p.get("dwell_mins", 60)
+                            model = get_category_visit_duration(p)
+                            p["dwell_mins"] = min(model.max_minutes, cur_d + (per_stop_add // 15) * 15)
                             p["visit_duration"] = p["dwell_mins"]
-                            if not tour_respects_meal_windows(tour_to_adjust):
-                                p["dwell_mins"] = cur_d
-                                p["visit_duration"] = cur_d
-                            else:
-                                slack_to_fill -= snapped_added
 
             # 2. Compress dwell times cleanly if over budget
             total_span, cur_travel, _, _ = calculate_loop_metrics(tour_to_adjust)
@@ -1459,8 +1530,14 @@ class RouteOptimizer:
 
             # 3. Prune lowest-utility stops if still over budget
             while tour_to_adjust and (calculate_loop_metrics(tour_to_adjust)[0] + calculate_safety_buffer_mins(calculate_loop_metrics(tour_to_adjust)[1])) > total_budget_mins:
+                # Budget pruning protection for locked stops
+                prunable_indices = [
+                    i for i in range(len(tour_to_adjust))
+                    if str(tour_to_adjust[i].get("place_id") or "") not in req_pids
+                ]
+                indices_to_consider = prunable_indices if prunable_indices else list(range(len(tour_to_adjust)))
                 worst_idx = min(
-                    range(len(tour_to_adjust)),
+                    indices_to_consider,
                     key=lambda i: tour_to_adjust[i].get("score_breakdown").final_score
                     if isinstance(tour_to_adjust[i].get("score_breakdown"), PlaceScoreBreakdown) else 0.0
                 )
@@ -1533,6 +1610,10 @@ class RouteOptimizer:
             if explicit_category_set and c_canon in explicit_category_set:
                 if prior_cat_count == 0:
                     meal_harmony_adj += 25.0
+
+            # Explicit destination request lock priority
+            if req_pids and str(raw_c.get("place_id") or "") in req_pids:
+                meal_harmony_adj += 1000.0
 
             value_gain = base_value + diversity_adj + meal_harmony_adj
 
@@ -1835,6 +1916,9 @@ class RouteOptimizer:
                 made_improvement = False
                 for i in range(len(best_t)):
                     old_stop = best_t[i]
+                    # Protect explicitly locked stops from being replaced
+                    if req_pids and str(old_stop.get("place_id") or "") in req_pids:
+                        continue
                     current_tour_pids = {p.get("place_id") for p in best_t}
 
                     candidate_pool = [
@@ -2017,6 +2101,36 @@ class RouteOptimizer:
 
         tour = best_tour
 
+        # Final Tour Dining Pruning Pass
+        clean_tour = []
+        cur_elapsed_check = 0
+        p_lat, p_lng, p_id = origin_lat, origin_lng, origin_id
+        assigned_meals = set()
+
+        for item in tour:
+            t_leg, _ = estimate_transit_time_minutes(
+                p_lat, p_lng, item["lat"], item["lng"],
+                mode, travel_matrix, p_id, item.get("place_id")
+            )
+            arr_dt = parse_clock_time(start_time_clock) + timedelta(minutes=cur_elapsed_check + t_leg)
+            arr_m = get_minute_of_day(arr_dt)
+
+            is_dedicated_food = is_restaurant_venue(item) and not is_cafe_or_light_refreshment(item)
+            meal_at_arr = get_meal_type_for_arrival(arr_m)
+
+            if is_dedicated_food and not item.get("is_locked", False):
+                if meal_at_arr is None or meal_at_arr in assigned_meals:
+                    logger.info(f"Pruning restaurant '{item.get('name')}' arriving at {arr_dt.strftime('%H:%M')} (outside meal window or duplicate meal)")
+                    continue
+            if meal_at_arr and (is_dedicated_food or is_food_candidate(item)):
+                assigned_meals.add(meal_at_arr)
+
+            clean_tour.append(item)
+            cur_elapsed_check += t_leg + item.get("dwell_mins", 60)
+            p_lat, p_lng, p_id = item["lat"], item["lng"], item.get("place_id")
+
+        tour = clean_tour
+
         if not tour:
             rejected_list = []
             for c in raw_candidates:
@@ -2121,12 +2235,8 @@ class RouteOptimizer:
             )
 
             arr_m = get_minute_of_day(arrival_dt)
-            curr_mp = None
-            for mp in DEFAULT_MEAL_PERIODS.values():
-                if mp.start_minute <= arr_m <= mp.end_minute:
-                    curr_mp = mp.name
-                    break
-            stop_meal_type = curr_mp if is_restaurant_venue(p) else p.get("meal_type")
+            curr_mp = get_meal_type_for_arrival(arr_m)
+            stop_meal_type = curr_mp if (is_restaurant_venue(p) or is_food_candidate(p)) else None
 
             stop_cat = "food" if stop_meal_type or is_food_candidate(p) else (p.get("category") or p.get("type") or "attraction")
             stop_obj = ScheduledItineraryStop(
@@ -2154,7 +2264,8 @@ class RouteOptimizer:
                 transit_from_prev_km=d_leg,
                 score_breakdown=score_dict,
                 selection_reasons=reasons,
-                meal_type=stop_meal_type
+                meal_type=stop_meal_type,
+                is_locked=bool(p.get("is_locked", False))
             )
             scheduled_stops.append(stop_obj)
             stop_dict = stop_obj.to_dict()
@@ -2382,7 +2493,8 @@ def optimize_route(
     selected_categories: Optional[List[str]] = None,
     allow_iconic_landmarks: bool = False,
     max_consecutive_same_category: int = 2,
-    route_scoring_config: Optional[RouteScoringConfig] = None
+    route_scoring_config: Optional[RouteScoringConfig] = None,
+    required_place_ids: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
     Stand-alone functional interface matching the exact problem specification.
@@ -2400,7 +2512,8 @@ def optimize_route(
         selected_categories=selected_categories,
         allow_iconic_landmarks=allow_iconic_landmarks,
         max_consecutive_same_category=max_consecutive_same_category,
-        route_scoring_config=route_scoring_config
+        route_scoring_config=route_scoring_config,
+        required_place_ids=required_place_ids
     )
 
 
@@ -2418,7 +2531,8 @@ def optimize_day_itinerary(
     selected_categories: Optional[List[str]] = None,
     allow_iconic_landmarks: bool = False,
     max_consecutive_same_category: int = 2,
-    route_scoring_config: Optional[RouteScoringConfig] = None
+    route_scoring_config: Optional[RouteScoringConfig] = None,
+    required_place_ids: Optional[List[str]] = None
 ) -> OptimizedItineraryPlan:
     """
     Maintained for backward compatibility with services.agent and existing tests.
@@ -2442,7 +2556,8 @@ def optimize_day_itinerary(
         selected_categories=selected_categories,
         allow_iconic_landmarks=allow_iconic_landmarks,
         max_consecutive_same_category=max_consecutive_same_category,
-        route_scoring_config=route_scoring_config
+        route_scoring_config=route_scoring_config,
+        required_place_ids=required_place_ids
     )
 
     # Convert dictionary stops to ScheduledItineraryStop list
@@ -2473,7 +2588,8 @@ def optimize_day_itinerary(
             transit_from_prev_km=s["transit_from_prev_km"],
             score_breakdown=s.get("score_breakdown", {}),
             selection_reasons=s.get("selection_reasons", []),
-            meal_type=s.get("meal_type")
+            meal_type=s.get("meal_type"),
+            is_locked=bool(s.get("is_locked", False))
         ))
 
     ret_leg = raw_res.get("return_to_start", {})

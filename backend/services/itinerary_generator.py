@@ -26,6 +26,7 @@ import re
 import json
 from typing import Dict, Any, List, Optional
 from services.llm_client import call_llm_json, get_openai_client, DEFAULT_MODEL
+from services.optimizer import validate_itinerary_meal_times
 
 
 # ---------------------------------------------------------------------------
@@ -236,8 +237,15 @@ Respond in strict JSON with the following format:
                 "distance_km": round(prev_dist_km, 2),
                 "distance_formatted": format_distance_km(prev_dist_km)
             },
-            "explanation": ai_stop_explanations.get(pid, default_stop_explanations.get(pid, ""))
+            "explanation": ai_stop_explanations.get(pid, default_stop_explanations.get(pid, "")),
+            "meal_type": s.get("meal_type"),
+            "is_meal_stop": s.get("is_meal_stop", bool(s.get("meal_type"))),
+            "is_locked": bool(s.get("is_locked", False))
         })
+
+    # Authoritative meal time validation on ordered destinations
+    start_clock_str = optimizer_data.get("start_clock") or optimizer_data.get("start_time") or "09:30 AM"
+    ordered_destinations = validate_itinerary_meal_times(ordered_destinations, start_time_clock=start_clock_str)
 
     # 6. Build Return-to-Start Confirmation
     return_confirmation = {

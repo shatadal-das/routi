@@ -312,8 +312,8 @@ Return JSON with this schema:
     def _extract_itinerary_state(
         self,
         itinerary: Dict[str, Any]
-    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], int, str, str]:
-        """Extracts normalized (start_location, stops, avail_mins, mode, vibe) from any itinerary schema."""
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], int, str, str, str]:
+        """Extracts normalized (start_location, stops, avail_mins, mode, vibe, start_clock) from any itinerary schema."""
         start_loc = (
             itinerary.get("start_location")
             or itinerary.get("starting_location")
@@ -355,7 +355,14 @@ Return JSON with this schema:
             or "Balanced sightseeing and dining"
         )
 
-        return start_loc, stops, avail_mins, mode, vibe
+        start_clock = (
+            itinerary.get("start_clock")
+            or itinerary.get("start_time")
+            or (itinerary.get("time_accounting", {}).get("start_time") if isinstance(itinerary.get("time_accounting"), dict) else None)
+            or "09:30 AM"
+        )
+
+        return start_loc, stops, avail_mins, mode, vibe, start_clock
 
     def _parse_modification_intent(
         self,
@@ -510,6 +517,22 @@ Extract structured modification intent matching this JSON schema:
             except Exception as e:
                 pass  # Fallback to robust deterministic rules
 
+        # 6. Explicit destination recognition & place locking
+        explicit_destination = None
+        generic_words = {
+            "cafe", "coffee", "restaurant", "museum", "park", "nature", "stop", "place",
+            "venue", "destination", "itinerary", "trip", "food", "lunch", "dinner", "breakfast",
+            "something", "another", "more"
+        }
+        place_req_match = re.search(
+            r"(?:i\s+want\s+to\s+(?:go\s+to|visit|see)|can\s+we\s+(?:go\s+to|visit|add|see)|please\s+add|add|include|take\s+me\s+to|must\s+visit)\s+([A-Z0-9][A-Za-z0-9\s'&.-]+?)(?:\s+(?:to\s+(?:the|my)\s+itinerary|to\s+the\s+trip|please|today|if\s+possible))?$",
+            request_message,
+            re.IGNORECASE
+        )
+        if place_req_match:
+            candidate_place_str = place_req_match.group(1).strip()
+            if candidate_place_str.lower() not in generic_words and len(candidate_place_str) > 2:
+                explicit_destination = candidate_place_str
 
         return {
             "excluded_categories": excluded_categories,
@@ -519,7 +542,8 @@ Extract structured modification intent matching this JSON schema:
             "max_destinations": max_destinations,
             "time_adjustment": time_adjustment,
             "dwell_multiplier": dwell_multiplier,
-            "summary": summary
+            "summary": summary,
+            "explicit_destination": explicit_destination
         }
 
     def modify_itinerary(
@@ -544,7 +568,7 @@ Extract structured modification intent matching this JSON schema:
         The optimizer is strictly responsible for producing the valid route.
         """
         # Step 1: Extract normalized state from current itinerary
-        start_loc, current_stops, avail_mins, mode, vibe = self._extract_itinerary_state(current_itinerary)
+        start_loc, current_stops, avail_mins, mode, vibe, start_clock = self._extract_itinerary_state(current_itinerary)
         origin_lat = float(start_loc.get("lat", 37.7955))
         origin_lng = float(start_loc.get("lng", -122.3937))
 
@@ -624,6 +648,31 @@ Extract structured modification intent matching this JSON schema:
         if desired_cats:
             updated_interests = f"{vibe}, {' '.join(desired_cats)}"
 
+        explicit_dest_name = intent.get("explicit_destination")
+        required_pids: List[str] = []
+        if explicit_dest_name:
+            found_place = None
+            for p in current_stops + (candidate_pool or []):
+                p_name = str(p.get("name") or p.get("place") or "").lower()
+                if explicit_dest_name.lower() in p_name or p_name in explicit_dest_name.lower():
+                    found_place = dict(p)
+                    break
+
+            if not found_place:
+                search_res = search_places(lat=origin_lat, lng=origin_lng, query=explicit_dest_name, max_results=5)
+                cand_list = search_res.get("places", [])
+                if cand_list:
+                    found_place = dict(cand_list[0])
+
+            if found_place:
+                found_place["is_locked"] = True
+                f_pid = str(found_place.get("place_id") or found_place.get("id") or "")
+                if f_pid:
+                    required_pids.append(f_pid)
+                    excluded_ids.discard(f_pid)
+                    filtered_pool = [c for c in filtered_pool if str(c.get("place_id") or c.get("id") or "") != f_pid]
+                    filtered_pool.insert(0, found_place)
+
         # Step 5: Call deterministic optimizer again
         optimizer_res = optimize_trip(
             start_location=start_loc,
@@ -632,7 +681,9 @@ Extract structured modification intent matching this JSON schema:
             user_interests=updated_interests,
             candidate_places=filtered_pool,
             dwell_multiplier=dwell_mult,
-            max_destinations=max_dest
+            max_destinations=max_dest,
+            start_time_clock=start_clock,
+            required_place_ids=required_pids
         )
 
         # Step 6: Validate time constraint & loop invariants
