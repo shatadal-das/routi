@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 
 /**
  * Universal Google Maps Directions URL generator
  */
-export function buildUniversalGoogleMapsUrl(startLocation, places = [], travelmode = 'driving') {
+function buildUniversalGoogleMapsUrl(startLocation, places = [], travelmode = 'driving') {
   if (!startLocation) return '';
   const origin =
     startLocation.lat && startLocation.lng
@@ -129,18 +129,13 @@ export default function Timeline({
   startLocation,
   places = [],
   legs = [],
-  totalTripTime = '',
-  totalDurationMins = 0,
   googleMapsUrl = '',
   totalTravelMins = 0,
   totalDwellMins = 0,
-  slackRemainingMins = 0,
   safetyBufferMins = 0,
   startClock = '09:30 AM',
   endClock = '',
-  bufferedEndClock = '',
   timeAccounting = null,
-  rejectedDestinations = [],
   narrative = '',
   routeScore = null,
 }) {
@@ -155,7 +150,6 @@ export default function Timeline({
   const availableMins = tAct.available_minutes ?? 0;
   const unusedMins = tAct.unused_minutes ?? (availableMins > planningBudgetMins ? availableMins - planningBudgetMins : 0);
   const unusedAvailableMins = tAct.unused_available_minutes ?? (availableMins > actualElapsedMins ? availableMins - actualElapsedMins : 0);
-  const windowStart = tAct.available_window_start || startTime;
   const windowEnd = tAct.available_window_end || '';
   const utilizationPct = availableMins > 0 ? Math.min(100, Math.round((planningBudgetMins / availableMins) * 1000) / 10) : 0;
   const diningCount = places.filter((p) => p.is_meal_stop || p.type === 'restaurant' || !!p.meal_type).length;
@@ -164,7 +158,6 @@ export default function Timeline({
   const formattedPlanningBudget = formatMinutesToHours(planningBudgetMins);
   const formattedUnusedAvailable = formatMinutesToHours(unusedAvailableMins || unusedMins);
   const formattedAvailableTotal = availableMins > 0 ? formatMinutesToHours(availableMins) : '';
-  const [showRejected, setShowRejected] = useState(false);
   const startAddress = startLocation?.address || startLocation?.name || 'Starting Point';
 
   const finalGoogleMapsUrl =
@@ -466,7 +459,7 @@ export default function Timeline({
                       {isRestaurant ? (
                         <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-500/25 text-amber-300 font-bold border border-amber-500/40 uppercase tracking-wide flex items-center space-x-1">
                           <span>🍽️</span>
-                          <span>{place.meal_type || 'Lunch'}</span>
+                          <span>{place.meal_type ? place.meal_type.toUpperCase() : 'RESTAURANT'}</span>
                         </span>
                       ) : (
                         <span className={`text-xs font-bold uppercase tracking-wider ${meta.colorText} flex items-center space-x-1`}>
@@ -602,57 +595,6 @@ export default function Timeline({
         </div>
 
       </div>
-
-      {/* Destination Alternatives & Tradeoffs */}
-      {rejectedDestinations && rejectedDestinations.length > 0 && (
-        <div className="mt-8 pt-5 border-t border-slate-800/80">
-          <button
-            type="button"
-            onClick={() => setShowRejected(!showRejected)}
-            className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-slate-800/40 hover:bg-slate-800/70 border border-slate-700/60 text-xs text-slate-300 font-semibold transition cursor-pointer"
-          >
-            <div className="flex items-center space-x-2">
-              <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span>Evaluated Candidates & Tradeoffs ({rejectedDestinations.length} considered)</span>
-            </div>
-            <span className="text-indigo-400 text-xs font-bold">
-              {showRejected ? 'Hide ▲' : 'Show ▼'}
-            </span>
-          </button>
-
-          {showRejected && (
-            <div className="mt-3 space-y-2 p-3.5 bg-slate-950/50 border border-slate-800/80 rounded-2xl animate-fadeIn">
-              <p className="text-[11px] text-slate-400 mb-2">
-                Scanned spots from your area that were omitted to respect your duration limit, transit efficiency, or meal window balance:
-              </p>
-              <div className="divide-y divide-slate-800/60">
-                {rejectedDestinations.map((cand, idx) => (
-                  <div key={`rej-${idx}`} className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-xs">
-                    <div>
-                      <span className="font-semibold text-slate-200">{cand.place}</span>
-                      <span className="ml-2 text-[10px] text-slate-400 uppercase tracking-wide">
-                        ({cand.category || 'venue'})
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {(cand.rejection_reasons || []).map((r, rIdx) => (
-                        <span
-                          key={`rr-${rIdx}`}
-                          className="text-[10px] px-2 py-0.5 rounded-md bg-rose-950/40 border border-rose-800/40 text-rose-300 font-medium"
-                        >
-                          {r}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

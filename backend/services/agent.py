@@ -18,7 +18,12 @@ from services.llm_client import (
     DEFAULT_MODEL
 )
 from services.scorer import score_and_rank_candidates, ScoringConfig
-from services.optimizer import optimize_day_itinerary, OptimizedItineraryPlan, calculate_safety_buffer_mins
+from services.optimizer import (
+    optimize_day_itinerary,
+    OptimizedItineraryPlan,
+    calculate_safety_buffer_mins,
+    validate_itinerary_meal_times
+)
 from services.itinerary_generator import generate_user_friendly_itinerary
 from services.tools import search_places, get_place_details, get_route, optimize_trip, geocode_location
 
@@ -49,12 +54,13 @@ class RoamAroundAgent:
         travel_mode: str = "DRIVE",
         start_time_clock: str = "09:30 AM",
         selected_categories: Optional[List[str]] = None,
-        allow_iconic_landmarks: bool = False
+        allow_iconic_landmarks: bool = False,
+        required_place_ids: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Executes the agentic workflow:
         1. Tool Execution: Runs mathematical optimizer (greedy insertion + 2-opt).
-        2. Generative Enrichment: Uses Gemini to craft day narratives and tailor stop rationales.
+        2. Generative Enrichment: Crafts day narratives and tailors stop rationales.
         3. Fallback Safety: Always yields a valid result even if LLM is unavailable.
         """
         # Step 1: Run algorithmic optimization tool
@@ -69,10 +75,11 @@ class RoamAroundAgent:
             travel_mode=travel_mode,
             start_time_clock=start_time_clock,
             selected_categories=selected_categories,
-            allow_iconic_landmarks=allow_iconic_landmarks
+            allow_iconic_landmarks=allow_iconic_landmarks,
+            required_place_ids=required_place_ids
         )
 
-        # Step 2: Generative narrative synthesis using Gemini
+        # Step 2: Generative narrative synthesis
         narrative, stop_refinements = self._generate_ai_enrichments(
             plan=plan,
             user_vibe=user_vibe,
@@ -120,6 +127,9 @@ class RoamAroundAgent:
                 "type": "restaurant" if getattr(stop, "meal_type", None) or stop.category in ["restaurant", "cafe", "food", "bakery"] else "attraction"
             })
 
+        # Apply authoritative meal validation
+        enriched_places = validate_itinerary_meal_times(enriched_places, start_time_clock=start_time_clock)
+
         # Step 4: Generate user-friendly 10-point JSON itinerary
         actual_buffer = getattr(plan, "safety_buffer_mins", calculate_safety_buffer_mins(plan.total_travel_mins))
         user_itinerary_input = {
@@ -160,7 +170,7 @@ class RoamAroundAgent:
 
         return {
             "status": "success",
-            "curator_model": self.model_name if self.model else "algorithmic-optimizer",
+            "curator_model": "Routi Engine",
             "start_location": {
                 "name": origin_name,
                 "lat": origin_lat,
@@ -354,8 +364,14 @@ Return JSON with this schema:
             or itinerary.get("user_preferences")
             or "Balanced sightseeing and dining"
         )
+        start_clock = (
+            itinerary.get("start_clock")
+            or itinerary.get("start_time")
+            or (itinerary.get("time_accounting", {}).get("start_time") if isinstance(itinerary.get("time_accounting"), dict) else None)
+            or "09:30 AM"
+        )
 
-        return start_loc, stops, avail_mins, mode, vibe
+        return start_loc, stops, avail_mins, mode, vibe, start_clock
 
     def _parse_modification_intent(
         self,
@@ -374,6 +390,7 @@ Return JSON with this schema:
         max_destinations = None
         time_adjustment = None
         dwell_multiplier = 1.0
+        explicit_destination = None
         summary_actions = []
 
         # 1. Restaurant / Dining removal ("Remove the restaurant", "no restaurants")
@@ -460,6 +477,18 @@ Return JSON with this schema:
             dwell_multiplier = max(dwell_multiplier, 1.4)
             summary_actions.append("Relaxed pacing with longer dwell times")
 
+        # 8. Explicit destination request ("I want to go to India Gate", "Add India Gate", "Can we visit Coit Tower")
+        place_req_match = re.search(
+            r"(?:i\s+want\s+to\s+(?:go\s+to|visit|see)|can\s+we\s+(?:go\s+to|visit|add|see)|please\s+add|add|include|take\s+me\s+to|must\s+visit)\s+([A-Z0-9][A-Za-z0-9\s'&.-]+?)(?:\s+(?:to\s+(?:the|my)\s+itinerary|to\s+the\s+trip|please|today|if\s+possible))?$",
+            request_message,
+            re.IGNORECASE
+        )
+        if place_req_match:
+            candidate_place_str = place_req_match.group(1).strip()
+            generic_words = {"a cafe", "cafe", "coffee", "restaurant", "a restaurant", "museum", "a museum", "nature", "park", "a park", "viewpoint", "something outdoors", "food", "places", "destinations", "stops"}
+            if candidate_place_str.lower() not in generic_words and len(candidate_place_str) > 2:
+                explicit_destination = candidate_place_str
+                summary_actions.append(f"Added requested destination: {explicit_destination}")
 
         summary = "; ".join(summary_actions) if summary_actions else "Refining itinerary based on your preferences"
 
@@ -473,6 +502,7 @@ Current Stops: {json.dumps(stops_context)}
 
 Extract structured modification intent matching this JSON schema:
 {{
+  "explicit_destination": "exact name of requested destination if user explicitly named a specific place, or null",
   "excluded_categories": ["list of lowercase categories to remove, e.g. restaurant, museum"],
   "excluded_place_ids": ["list of place_ids to remove"],
   "desired_categories": ["list of categories to add or prioritize, e.g. park, cafe"],
@@ -485,6 +515,8 @@ Extract structured modification intent matching this JSON schema:
 """
                 ai_data = call_llm_json(prompt=ai_prompt, model=self.model_name, client=self.client)
                 if isinstance(ai_data, dict):
+                    if ai_data.get("explicit_destination"):
+                        explicit_destination = ai_data["explicit_destination"]
                     if ai_data.get("excluded_categories"):
                         for c in ai_data["excluded_categories"]:
                             if c.lower() not in excluded_categories:
@@ -510,8 +542,8 @@ Extract structured modification intent matching this JSON schema:
             except Exception as e:
                 pass  # Fallback to robust deterministic rules
 
-
         return {
+            "explicit_destination": explicit_destination,
             "excluded_categories": excluded_categories,
             "excluded_place_ids": excluded_place_ids,
             "desired_categories": desired_categories,
@@ -544,7 +576,7 @@ Extract structured modification intent matching this JSON schema:
         The optimizer is strictly responsible for producing the valid route.
         """
         # Step 1: Extract normalized state from current itinerary
-        start_loc, current_stops, avail_mins, mode, vibe = self._extract_itinerary_state(current_itinerary)
+        start_loc, current_stops, avail_mins, mode, vibe, start_clock = self._extract_itinerary_state(current_itinerary)
         origin_lat = float(start_loc.get("lat", 37.7955))
         origin_lng = float(start_loc.get("lng", -122.3937))
 
@@ -585,6 +617,32 @@ Extract structured modification intent matching this JSON schema:
             if pid not in seen_pids:
                 seen_pids.add(pid)
                 filtered_pool.append(c)
+
+        # Handle explicit destination request (locked destination)
+        explicit_dest_name = intent.get("explicit_destination")
+        required_pids = []
+        if explicit_dest_name:
+            found_place = None
+            for p in current_stops + (candidate_pool or []):
+                p_name = str(p.get("name") or p.get("place") or "").lower()
+                if explicit_dest_name.lower() in p_name or p_name in explicit_dest_name.lower():
+                    found_place = dict(p)
+                    break
+
+            if not found_place:
+                search_res = search_places(lat=origin_lat, lng=origin_lng, query=explicit_dest_name, max_results=5)
+                cand_list = search_res.get("places", [])
+                if cand_list:
+                    found_place = dict(cand_list[0])
+
+            if found_place:
+                found_place["is_locked"] = True
+                f_pid = str(found_place.get("place_id") or found_place.get("id") or "")
+                if f_pid:
+                    required_pids.append(f_pid)
+                    excluded_ids.discard(f_pid)
+                    filtered_pool = [c for c in filtered_pool if str(c.get("place_id") or c.get("id") or "") != f_pid]
+                    filtered_pool.insert(0, found_place)
 
         # Search new candidates if search_query or desired_categories are present
         search_q = intent.get("search_query")
@@ -632,7 +690,9 @@ Extract structured modification intent matching this JSON schema:
             user_interests=updated_interests,
             candidate_places=filtered_pool,
             dwell_multiplier=dwell_mult,
-            max_destinations=max_dest
+            max_destinations=max_dest,
+            start_time_clock=start_clock,
+            required_place_ids=required_pids if required_pids else None
         )
 
         # Step 6: Validate time constraint & loop invariants
@@ -645,6 +705,11 @@ Extract structured modification intent matching this JSON schema:
             user_preferences=updated_interests,
             transportation_mode=mode
         )
+        if user_itinerary.get("ordered_destinations"):
+            user_itinerary["ordered_destinations"] = validate_itinerary_meal_times(
+                user_itinerary["ordered_destinations"],
+                start_time_clock=start_clock
+            )
 
         # Compute delta for transparency
         prev_pids = {s.get("place_id") for s in current_stops}

@@ -7,7 +7,7 @@ export default function SearchForm({
   onSubmit,
   onLocationChange,
   isLoading = false,
-  loadingMessage = 'Curating Itinerary...',
+  loadingMessage = 'Planning your day...',
 }) {
   const [address, setAddress] = useState('');
   const [coords, setCoords] = useState({ lat: null, lng: null });
@@ -44,7 +44,7 @@ export default function SearchForm({
           setSuggestions(res.data.results);
           setShowSuggestions(true);
         }
-      } catch (err) {
+      } catch {
         // Silent catch
       } finally {
         setIsSearchingSuggestions(false);
@@ -175,6 +175,7 @@ export default function SearchForm({
         transportation_mode: transportMode,
         address: address.trim(),
         interests: combinedInterests,
+        selected_categories: selectedInterests.length > 0 ? selectedInterests : [],
         vibe: combinedInterests.join(', ') || undefined,
         vibe_preference: combinedInterests.join(', ') || undefined,
         price_level: priceLevel || undefined,
@@ -286,12 +287,12 @@ export default function SearchForm({
           </div>
         </div>
 
-        {/* Trip Vibe & Atmosphere (AI Curated) */}
+        {/* Trip Vibe & Atmosphere */}
         <div>
           <div className="flex justify-between items-center mb-2">
             <label htmlFor="vibe-input" className="text-xs font-bold text-slate-200 tracking-wide uppercase flex items-center space-x-1.5">
               <span>Trip Vibe</span>
-              <span className="text-[11px] text-indigo-400 font-medium">✨ AI Curated</span>
+              <span className="text-[11px] text-indigo-400 font-medium">✨ Personalized</span>
             </label>
             {vibe && (
               <button

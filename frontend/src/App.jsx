@@ -11,20 +11,20 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000
 
 const LOADING_MESSAGES = [
   {
-    title: 'Scanning nearby spots...',
-    subtitle: 'Discovering top-rated attractions, parks, and dining spots nearby',
+    title: 'Finding great places...',
+    subtitle: 'Discovering top-rated attractions, parks, viewpoints, and dining nearby',
   },
   {
-    title: 'AI is curating your vibe...',
-    subtitle: 'Gemma 3 27B matching venues with your custom trip atmosphere',
+    title: 'Personalizing your trip...',
+    subtitle: 'Balancing destinations and activities with your schedule',
   },
   {
-    title: 'Estimating realistic dwell times...',
-    subtitle: 'Calculating dynamic time allocations for each stop',
+    title: 'Estimating visit times...',
+    subtitle: 'Allocating comfortable visit durations for each stop',
   },
   {
-    title: 'Optimizing the driving route...',
-    subtitle: 'Sequencing waypoints to minimize travel time and traffic',
+    title: 'Optimizing your itinerary...',
+    subtitle: 'Sequencing stops to minimize travel time and keep your day smooth',
   },
 ];
 
@@ -90,6 +90,7 @@ function App() {
       address,
       transport_mode,
       interests,
+      selected_categories,
       vibe,
       vibe_preference,
       price_level,
@@ -110,6 +111,7 @@ function App() {
         time_hours: hours,
         transport_mode: transport_mode || 'DRIVE',
         interests: interests || (vibe ? [vibe] : []),
+        selected_categories: selected_categories || null,
         vibe: vibe || vibe_preference,
         vibe_preference: vibe || vibe_preference,
         price_level: price_level,

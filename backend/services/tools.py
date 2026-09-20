@@ -391,7 +391,9 @@ def optimize_trip(
     dwell_multiplier: float = 1.0,
     scoring_config: Optional[ScoringConfig] = None,
     start_time_clock: str = "09:30 AM",
-    max_destinations: Optional[int] = None
+    max_destinations: Optional[int] = None,
+    selected_categories: Optional[List[str]] = None,
+    required_place_ids: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
     Runs the deterministic route optimization engine. Solves the Orienteering Problem (OP)
@@ -435,7 +437,10 @@ def optimize_trip(
         user_interests=user_interests,
         candidate_places=candidates,
         scoring_config=scoring_config,
-        max_destinations=max_destinations
+        max_destinations=max_destinations,
+        start_time_clock=start_time_clock,
+        selected_categories=selected_categories,
+        required_place_ids=required_place_ids
     )
 
     return result

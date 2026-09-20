@@ -163,35 +163,50 @@ Routi/
 
 ## 4. The Optimization & Scheduling Engine (`optimizer.py`)
 
-The core of Routi is implemented in `backend/services/optimizer.py` (2,200+ lines). It formulates day trip generation as an **Orienteering Problem with Time Windows (OPTW)** and solves it using a combination of **Seeded Greedy Insertion** and **2-Opt Local Search**.
+The core of Routi is implemented in `backend/services/optimizer.py` (2,500+ lines). It formulates day trip generation as an **Orienteering Problem with Time Windows (OPTW)** and solves it using a combination of **Marginal Value Greedy Insertion**, **2-Opt Local Search**, and **Large Neighborhood Search (LNS)**.
 
-### 4.1 Orienteering Problem (OP) Formulation
+### 4.1 Orienteering Problem (OP) & Marginal Value Formulation
 
 Let $V = \{v_0, v_1, \dots, v_n\}$ be the set of places, where $v_0$ is the starting origin (and designated destination).
-- Each candidate venue $v_i$ carries a non-negative score $S(v_i)$ and a visit dwell time $D(v_i)$.
+- Each candidate venue $v_i$ carries quality score $Q(v_i)$ and visit dwell duration $D(v_i)$.
 - For every pair $(v_i, v_j)$, the transit time is $T(v_i, v_j)$.
-- The user provides an available time budget $B$ in minutes.
+- The user provides an available time budget $B$ in minutes (e.g. 2h, 4h, 6h, 8h, 12h).
 
-The goal is to select a subset of venues $U \subseteq V \setminus \{v_0\}$ and an ordering $(v_{\pi(1)}, v_{\pi(2)}, \dots, v_{\pi(k)})$ to:
+Rather than simply asking *"Does this candidate fit into the remaining time?"*, Routi asks:
+> **"Is adding this destination worth the additional time?"**
 
-$$\max \sum_{i=1}^k S(v_{\pi(i)})$$
+For each candidate, the optimizer calculates the **Marginal Value**:
 
-subject to the round-trip time budget constraint:
+$$\text{MarginalValue}(v) = Q(v) + \text{PrefMatch}(v) + \text{LandmarkVal}(v) + \text{CategoryDiversity}(v) + \text{ItineraryFit}(v) - \text{TravelCost}(v) - \text{TimeCost}(v)$$
 
-$$T(v_0, v_{\pi(1)}) + \sum_{i=1}^{k-1} \left( D(v_{\pi(i)}) + T(v_{\pi(i)}, v_{\pi(i+1)}) \right) + D(v_{\pi(k)}) + T(v_{\pi(k)}, v_0) + \text{Buffer}(k) \le B$$
+Where:
+$$\text{TimeCost}(v) = T(v_{\text{prev}}, v) + D(v) + \Delta T(v, v_0)$$
 
-### 4.2 The 6 Hard Constraints
+This enables the engine to dynamically adapt:
+- For short trips (2h–4h): prioritize nearby, high-density gems with low detour overhead.
+- For long trips (8h–12h): evaluate expansive candidates and high-value landmarks across the city, avoiding premature termination while rejecting low-quality filler.
 
-The optimizer strictly enforces six non-negotiable invariants:
+### 4.2 The 15 Hard Production Rules
 
-| # | Hard Constraint | Enforcement Mechanism |
+Routi strictly enforces 15 non-negotiable invariants:
+
+| # | Rule | Enforcement Mechanism |
 |---|---|---|
-| **1** | **Origin Start** | Route leg 0 strictly originates at the user's geocoded starting coordinates. |
-| **2** | **Round-Trip Loop** | The final leg strictly returns to the starting coordinates ($v_{\pi(k)} \to v_0$). |
-| **3** | **Hard Time Budget** | Total trip time (travel + dwell + safety buffer) cannot exceed available minutes. |
-| **4** | **Guaranteed Return Reservation** | When testing candidate $v_{\text{cand}}$, the engine checks: `elapsed + travel(curr, cand) + dwell(cand) + travel(cand, start) + buffer <= available_time`. If false, candidate is rejected immediately. |
-| **5** | **No Duplicate Places** | Venues are deduplicated by Google `place_id` and normalized name + geographic coordinates within 50 meters. |
-| **6** | **No Unreachable Stops** | Candidate venues with transit time exceeding remaining slack are discarded. |
+| **1** | **Explicit Place Locking** | User-requested venues (by name) are locked (`is_locked = True`), seeded with $+1000$ priority, and preserved from removal. |
+| **2** | **Category Restrictions** | Explicitly selected categories restrict candidate selection to those genres (+ at most 1 iconic landmark). |
+| **3** | **No-Preference Discovery** | Selecting no categories represents "no preference" (NOT exclusion); enables broad discovery across attractions, parks, viewpoints, and dining. |
+| **4** | **Deterministic Meal Windows** | Meals are restricted strictly to Breakfast (`07:00–10:30`), Lunch (`11:30–15:00`), and Dinner (`18:00–21:30`). |
+| **5** | **Arrival-Time Determination** | Meal type is calculated strictly from cumulative arrival clock time, accounting for all transit legs. |
+| **6** | **No 4 PM Lunches** | Any food stop outside valid windows receives `meal_type = None` and `is_meal_stop = False`. Dedicated dining outside meal windows is skipped. |
+| **7** | **Max 1 Meal Per Window** | At most one restaurant is scheduled per meal period (e.g., exactly 1 lunch, 1 dinner). |
+| **8** | **No Back-to-Back Dining** | The optimizer forbids two consecutive food stops under any circumstances. |
+| **9** | **Max 2 Consecutive Same Category** | No category can appear more than twice consecutively (ensuring diverse pacing). |
+| **10** | **Exact Start Clock** | The user-specified departure time (e.g. `09:00 AM`) anchors all cumulative timetable math. |
+| **11** | **Origin Start & Return Loop** | Leg 0 originates at the start location, and the final leg strictly returns to the origin. |
+| **12** | **Hard Time Budget** | Total trip time (travel + visit dwell + safety buffer) cannot exceed the user's available time. |
+| **13** | **Strict Component Separation** | Travel time, visit duration, safety buffer, and unused time are tracked as distinct, non-overlapping quantities. |
+| **14** | **Deterministic Authority** | The LLM cannot override, hallucinate, or loosen optimizer mathematical constraints. |
+| **15** | **Preserved Presentation Data** | The frontend presentation layer displays only validated backend schedule data without fabrication. |
 
 ### 4.3 Multi-Objective Scoring & Diversity Penalties
 
@@ -199,79 +214,43 @@ Before insertion, each candidate place is evaluated by `services/scorer.py` usin
 
 $$\text{TotalScore}(v) = w_r \cdot \text{BayesianRating}(v) + w_v \cdot \text{VibeMatch}(v) + w_p \cdot \text{ProximityScore}(v) - \text{Penalty}_{\text{cat}}(v)$$
 
-- **Bayesian Rating**: Smoothes raw 1–5 star ratings based on total review count so a 5.0 star place with 2 reviews does not outrank a 4.7 star venue with 8,000 reviews.
-- **Vibe Match**: Natural language token overlap and semantic keyword intersection against user-provided interests.
-- **Category Repetition Penalty**: Each subsequent venue from an already-selected category receives an exponential diminishing-returns penalty:
+- **Bayesian Rating**: Smoothes raw 1–5 star ratings based on total review count ($C=25, m=4.2$) so that low-review outliers do not distort ranking.
+- **Category Repetition Penalty**: Each subsequent venue from an already-selected category receives an exponential penalty $\text{Penalty}_{\text{cat}}(c) = 0.35 \times (\text{count}(c))^2$.
 
-$$\text{Penalty}_{\text{cat}}(c) = 0.35 \times (\text{count}(c))^2$$
+### 4.4 Seeded Greedy Insertion & LNS Optimization
 
-This prevents itineraries from recommending 4 museums or 3 coffee shops in a single day.
+1. **Seeding**: Any locked place (`is_locked = True`) is automatically seeded into the tour. If no locked places exist, the top-scoring candidate serves as the seed.
+2. **Greedy Insertion**: Evaluates insertion into every tour position using marginal value efficiency.
+3. **2-Opt TSP Search**: Untangles route crossings while preserving fixed origin and locked stops.
+4. **Large Neighborhood Search (LNS)**: Performs 1-remove-1-insert perturbations to escape local optima, strictly preserving locked stops and meal constraints.
 
-### 4.4 Seeded Greedy Insertion Heuristic
+### 4.5 Deterministic Meal Window & Arrival Time Scheduling
 
-```
-1. Initialize itinerary = [Start_Location]
-2. Rank all candidate places by initial Score.
-3. Select highest-scoring place as initial seed anchor.
-4. While available time remains:
-     a. For each unvisited candidate c:
-          i. Evaluate insertion into every possible position in the current tour.
-          ii. Calculate delta_travel = travel(i-1, c) + travel(c, i) - travel(i-1, i)
-          iii. Calculate total_needed = delta_travel + dwell(c) + buffer_delta
-          iv. If (current_duration + total_needed) <= available_time:
-                 efficiency_ratio = Score(c) / max(1.0, delta_travel)
-                 Track best candidate with highest efficiency_ratio
-     b. If a valid candidate is found:
-          Insert into best position.
-        Else:
-          Break (no more candidates can fit with guaranteed return loop).
-```
-
-### 4.5 2-Opt Local Search TSP Tour Optimization
-
-Greedy insertion can produce crossing route segments. The optimizer runs a **2-Opt Local Search** algorithm over the selected stops (keeping Start/End fixed):
+Routi enforces hard meal boundaries based on arrival clock minutes from midnight:
 
 ```
-repeat until no improvement:
-    for i from 1 to k-1:
-        for j from i+1 to k:
-            delta = distance(i-1, j) + distance(i, j+1) - (distance(i-1, i) + distance(j, j+1))
-            if delta < 0:
-                reverse tour segment from i to j
+Breakfast Window: 07:00 – 10:30 (420 – 630 min)
+Lunch Window:     11:30 – 15:00 (690 – 900 min)
+Dinner Window:    18:00 – 21:30 (1080 – 1290 min)
 ```
 
-This untangles path crossings and significantly reduces total transit time.
+- **Arrival Time Calculation**:
+  $$\text{Arrival Time} = \text{Start Clock} + \sum (\text{transit} + \text{dwell}) + \text{leg\_transit}$$
+- **Window Rules**:
+  - `09:36 AM` $\to$ **BREAKFAST**
+  - `12:30 PM` or `14:45 PM` $\to$ **LUNCH**
+  - `15:45 PM` or `16:00 PM` $\to$ **NO MEAL SLOT** (`meal_type = None`)
+  - `19:00 PM` $\to$ **DINNER**
+- **Authoritative Validation**: `validate_itinerary_meal_times()` runs immediately before dispatching responses, stripping invalid meal tags and pruning unslotted dining venues.
 
-### 4.6 Meal Window & Dwell Time Scheduling
+### 4.6 Dynamic Safety Buffer Formulation
 
-Routi avoids scheduling meals at unrealistic hours (e.g. lunch at 10:00 AM or 4:00 PM):
-
-```
-Lunch Window:   12:00 PM – 02:30 PM (Ideal target: 12:45 PM – 01:30 PM)
-Dinner Window:  06:30 PM – 09:30 PM (Ideal target: 07:00 PM – 08:30 PM)
-```
-
-- **Meal Inclusion Logic**: If the itinerary overlaps lunch or dinner hours, the engine prioritizes inserting a top-rated dining venue into the matching time slot.
-- **Dwell Time by Category** (`taxonomy.py`):
-  - `museum / gallery`: 90–120 mins
-  - `park / scenic viewpoint`: 45–60 mins
-  - `historic landmark / temple`: 60–90 mins
-  - `casual dining / lunch`: 60 mins
-  - `sit-down dinner`: 75–90 mins
-  - `cafe / bakery`: 35–45 mins
-
-### 4.7 Dynamic Safety Buffer Formulation
-
-To guarantee that travelers never miss their return deadline due to unexpected traffic or dwell overruns:
+To guarantee that travelers never miss their return deadline:
 
 $$\text{SafetyBuffer} = \min\left(45, \; 10 + (\text{num\_stops} \times 4) + \text{ModeBuffer}\right)$$
 
-Where:
-- $\text{ModeBuffer}(\text{DRIVE}) = 10\text{ mins}$ (traffic variability)
-- $\text{ModeBuffer}(\text{WALK}) = 5\text{ mins}$
-- $\text{ModeBuffer}(\text{BICYCLE}) = 5\text{ mins}$
-
-The resulting buffer (typically 15–30 minutes) is reported explicitly on the frontend timeline as peace-of-mind slack.
+Where $\text{ModeBuffer}(\text{DRIVE}) = 10\text{ min}$, $\text{ModeBuffer}(\text{WALK}) = 5\text{ min}$, $\text{ModeBuffer}(\text{BICYCLE}) = 5\text{ min}$.
+The buffer is tracked separately from travel and dwell times.
 
 ---
 
@@ -399,11 +378,11 @@ flowchart LR
 
 | Component | Key Responsibilities |
 |---|---|
-| **`App.jsx`** | Central state holder (`itinerary`, `activeStopId`, `isLoading`). Loads the Google Maps JavaScript API via `@react-google-maps/api`. Renders sticky dual-column desktop view. |
-| **`SearchForm.jsx`** | Debounced place search suggestions (`/api/places/autocomplete`), time duration slider, 12h/24h start time picker with dynamic expected return clock, transport mode selector, interest tag toggles, and price tiers. |
-| **`Timeline.jsx`** | Chronological vertical schedule. Shows arrival/departure timestamps, transit leg metrics (distance + travel mins), category badges, AI selection rationale tags, dwell time justifications, safety buffer alert, and rejected destinations drawer. |
+| **`App.jsx`** | Central state holder (`itinerary`, `activeStopId`, `isLoading`). Manages product-focused loading states, forwards `selected_categories` to API, and renders sticky dual-column desktop view. |
+| **`SearchForm.jsx`** | Debounced place search suggestions (`/api/places/autocomplete`), time duration slider, 12h/24h start time picker with dynamic expected return clock, transport mode selector, interest tag toggles (`selected_categories`), and personalized vibe input. |
+| **`Timeline.jsx`** | Chronological vertical schedule. Displays arrival/departure timestamps, transit leg metrics (distance + travel mins), category badges, deterministic meal tags (`BREAKFAST`, `LUNCH`, `DINNER`, `RESTAURANT`), dwell time justifications, and safety buffer alert. |
 | **`Map.jsx`** | Dark-mode Google Map (`#1e293b`). Renders numbered custom SVG map markers for each stop, departure flag, decoded route polyline, and interactive InfoWindows on click. |
-| **`AgentChat.jsx`** | Floating AI Concierge drawer. Features quick-action prompt chips (e.g. *Remove Restaurant*, *Add Cafe*, *Make Shorter*) and natural-language chat that directly modifies the live itinerary. |
+| **`AgentChat.jsx`** | Floating Trip Concierge drawer. Features quick-action prompt chips (e.g. *Remove Restaurant*, *Add Cafe*, *Make Shorter*) and natural-language chat that directly modifies the live itinerary and supports explicit place locking. |
 
 ---
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { GoogleMap, MarkerF, PolylineF, InfoWindowF } from '@react-google-maps/api';
 import { decodePolyline } from '../utils/polyline';
 
@@ -158,7 +158,7 @@ export default function Map({
     if (hasPoints) {
       map.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
       // If only one point, avoid overzooming
-      const listener = window.google.maps.event.addListenerOnce(map, 'idle', () => {
+      window.google.maps.event.addListenerOnce(map, 'idle', () => {
         if (map.getZoom() > 15) {
           map.setZoom(14);
         }

@@ -21,7 +21,7 @@ export default function AgentChat({
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      text: "Hello! I'm your RoamAround AI Concierge. How can I adjust your day trip? You can ask me to swap stops, remove dining, shorten the schedule, or change the pacing.",
+      text: "Hello! I'm your RoamAround Concierge. How can I adjust your day trip? You can ask me to add places, remove dining, shorten the schedule, or change the pacing.",
       delta: null,
       adviceActions: null,
     },
@@ -145,7 +145,7 @@ export default function AgentChat({
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400"></span>
             </span>
-            <span className="text-xs font-bold tracking-wide">AI Concierge</span>
+            <span className="text-xs font-bold tracking-wide">Trip Concierge</span>
             <svg
               className="w-4 h-4 text-white/90 group-hover:scale-110 transition-transform"
               fill="none"
@@ -188,7 +188,7 @@ export default function AgentChat({
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                 </h3>
                 <p className="text-[11px] text-indigo-300/80 font-medium">
-                  Conversational Optimizer Agent
+                  Interactive Trip Assistant
                 </p>
               </div>
             </div>

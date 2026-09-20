@@ -11,7 +11,7 @@ from services.ai_curator import curate_itinerary
 from services.routing import get_optimized_route, build_google_maps_directions_url
 from services.geocoding import geocode_location, search_place_suggestions
 from services.agent import RoamAroundAgent
-from services.optimizer import calculate_safety_buffer_mins, determine_visit_duration_mins
+from services.optimizer import calculate_safety_buffer_mins, determine_visit_duration_mins, validate_itinerary_meal_times
 
 load_dotenv()
 
@@ -131,13 +131,19 @@ def agent_chat(request: AgentChatRequest):
                 "arrival_time": s.get("arrival_time", ""),
                 "departure_time": s.get("departure_time", ""),
                 "category": s.get("category", "attraction"),
-                "type": "restaurant" if s.get("category") in ["restaurant", "cafe", "food"] else "attraction",
+                "type": "restaurant" if s.get("category") in ["restaurant", "cafe", "food"] or s.get("meal_type") else "attraction",
                 "selection_reasons": s.get("selection_reasons", []),
                 "rating": s.get("rating"),
                 "address": s.get("address", ""),
                 "ai_reasoning": s.get("ai_reasoning", "Curated for your day trip."),
-                "time_estimate_reason": s.get("time_estimate_reason", "")
+                "time_estimate_reason": s.get("time_estimate_reason", ""),
+                "meal_type": s.get("meal_type"),
+                "is_meal_stop": bool(s.get("meal_type")),
+                "is_locked": bool(s.get("is_locked", False))
             })
+
+        start_clock_agent = opt_out.get("start_clock") or opt_out.get("start_time") or "09:30 AM"
+        formatted = validate_itinerary_meal_times(formatted, start_time_clock=start_clock_agent)
 
         start_lat = start_loc.get("lat")
         start_lng = start_loc.get("lng")
@@ -161,7 +167,7 @@ def agent_chat(request: AgentChatRequest):
         res["route_result"] = {
             "status": "success",
             "message": res.get("message", "Route updated"),
-            "curator_model": "roam-agent",
+            "curator_model": "Routi Engine",
             "start_location": start_loc,
             "optimized_places": formatted,
             "total_trip_time": f"{total_hours} hours",
@@ -250,12 +256,6 @@ def process_trip_planning(request: RouteRequest):
         vibe_query = (request.vibe or request.vibe_preference or "").strip() or None
 
     explicit_cats = request.selected_categories
-    if not explicit_cats and request.interests and isinstance(request.interests, list):
-        from services.taxonomy import normalize_category
-        rec = [i for i in request.interests if normalize_category(str(i))]
-        if rec:
-            explicit_cats = rec
-
     allow_landmarks = bool(request.allow_iconic_landmarks)
 
     cuisine = request.cuisine or None
@@ -400,13 +400,16 @@ def process_trip_planning(request: RouteRequest):
             "arrival_time": extra.get("arrival_time", ""),
             "departure_time": extra.get("departure_time", ""),
             "category": extra.get("category", p.get("type", "attraction")),
-            "meal_type": extra.get("meal_type") or p.get("meal_type"),
-            "is_meal_stop": bool(extra.get("meal_type") or p.get("meal_type")),
+            "meal_type": extra["meal_type"] if "meal_type" in extra else p.get("meal_type"),
+            "is_meal_stop": bool(extra.get("meal_type") if "meal_type" in extra else p.get("meal_type")),
             "selection_reasons": extra.get("selection_reasons", []),
             "score_breakdown": extra.get("score_breakdown", {})
         })
 
     agent_data = agent_plan if "agent_plan" in locals() and isinstance(agent_plan, dict) else {}
+    start_clock = agent_data.get("start_clock", start_clock_str if "start_clock_str" in locals() else "09:30 AM")
+    formatted_places = validate_itinerary_meal_times(formatted_places, start_time_clock=start_clock)
+
     total_travel = agent_data.get("travel_minutes", agent_data.get("total_travel_mins", 0))
     total_dwell = agent_data.get("visit_minutes", agent_data.get("total_dwell_mins", 0))
     safety_buffer = agent_data.get("safety_buffer_minutes") or agent_data.get("safety_buffer_mins") or calculate_safety_buffer_mins(total_travel)
@@ -511,8 +514,8 @@ def process_trip_planning(request: RouteRequest):
         "unused_minutes": unused_mins,
         "unused_available_minutes": unused_available_mins,
         "time_accounting": time_accounting,
-        "message": "AI-curated route generated successfully",
-        "curator_model": curator_model,
+        "message": "Personalized route generated successfully",
+        "curator_model": "Routi Engine",
         "vibe": vibe_query,
         "vibe_preference": vibe_query or "Balanced sightseeing and dining",
         "price_level": price_level,

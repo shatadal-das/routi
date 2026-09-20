@@ -1,31 +1,35 @@
 # Routi 🗺️✨
 
-> **AI-Curated Day Trip Planner & Algorithmic Route Optimization Engine**  
+> **Personalized Day Trip Planner & Algorithmic Route Optimization Engine**  
 > Combines Google Places API (New), Google Routes API (TSP optimization), and Google Gemini to deliver personalized, perfectly-timed round-trip day itineraries based on time budget, travel mode, budget tiers, and custom vibes.
 
 ---
 
 ## 🌟 Overview
 
-Planning a day trip usually requires juggling maps, opening hours, travel distances, meal timing, and venue quality. **Routi** solves this by unifying **deterministic combinatorial optimization** with **generative AI intelligence**:
+Planning a day trip usually requires juggling maps, opening hours, travel distances, meal timing, and venue quality. **Routi** solves this by unifying **deterministic combinatorial optimization** with **conversational AI intelligence**:
 
-1. **Deterministic Route Optimizer**: Solves the Orienteering Problem (OP) using Seeded Greedy Insertion and a 2-Opt Local Search TSP solver. It strictly honors hard constraints (time budgets, round-trip loop closure, category quotas, dynamic safety buffers, and realistic dwell times).
-2. **Autonomous AI Concierge (Gemini)**: Acts as an interactive travel concierge (`/api/agent/chat`), allowing users to iteratively modify itineraries via natural language (e.g. *"add a scenic cafe stop"*, *"remove the restaurant"*, *"make the trip more relaxed"*).
-3. **Full Explainability**: Every recommended stop includes explicit selection rationale tags, dwell-time justifications, and a log of rejected destinations showing why certain candidate venues were omitted (e.g., detour too large, time limit exceeded, duplicate category).
-4. **Google Maps Navigation Export**: Generates a one-click native Google Maps URL with sequential waypoints for turn-by-turn mobile navigation.
+1. **Deterministic Route Optimizer**: Formulates and solves the Orienteering Problem with Time Windows (OPTW) using Seeded Greedy Insertion, Marginal Value candidate evaluation, and a 2-Opt Local Search TSP solver. It strictly honors hard constraints (time budgets, round-trip loop closure, category quotas, dynamic safety buffers, realistic dwell times, and deterministic meal windows).
+2. **Dynamic Duration Scaling**: Seamlessly adapts itineraries across short and long trip horizons (2h, 4h, 6h, 8h, 12h) by evaluating candidates based on marginal value rather than simple greedy packing.
+3. **Deterministic Meal Windows**: Enforces strict meal windows based on actual arrival times: Breakfast (`07:00–10:30`), Lunch (`11:30–15:00`), and Dinner (`18:00–21:30`). A stop at 16:00 is never mislabeled as lunch.
+4. **Explicit Destination Locking**: When users request a specific place by name (e.g. *"I want to go to India Gate"*), the venue is resolved, locked (`is_locked = True`), and prioritized without displacement.
+5. **Dual Category Modes**: Explicit category selections restrict recommendations to chosen interests; an empty selection represents "no preference", enabling broad discovery across top attractions, monuments, parks, and meal-window dining.
+6. **Interactive Trip Concierge**: Floating concierge drawer (`/api/agent/chat`) allowing users to iteratively modify itineraries via natural language (e.g. *"add a scenic cafe stop"*, *"remove the restaurant"*, *"make the trip more relaxed"*).
+7. **Google Maps Navigation Export**: Generates a one-click native Google Maps URL with sequential waypoints for turn-by-turn mobile navigation.
 
 ---
 
 ## 🚀 Key Features
 
 - **⏱️ Hard Time Budget & Round-Trip Loop Guarantees**: Guaranteed return to your starting point within your specified time limit, with return transit time strictly reserved during every step.
+- **🍽️ Deterministic Meal Scheduling**: Hard constraints for Breakfast (`07:00–10:30`), Lunch (`11:30–15:00`), and Dinner (`18:00–21:30`). Meal types are calculated strictly from arrival clock time. Out-of-window food stops are skipped or scheduled as refreshments without invalid meal labels.
+- **🔒 Direct Destination Constraints**: Named destination requests are locked and seeded with priority in the optimizer.
+- **🎯 Dynamic Marginal Value Optimization**: Evaluates candidates by marginal value ($Q + P + L + D - \Delta\text{Travel} - \Delta\text{Time}$) to prevent premature stopping or low-value padding on 8–12 hour trips.
 - **🛡️ Dynamic Safety Buffering**: Automatically calculates transit and dwell safety buffers based on stop count and travel mode (Drive, Walk, Bicycle) to prevent tight schedules.
-- **🍽️ Smart Meal Scheduling**: Automatically slots lunch or dinner stops into designated time windows with appropriate dwell times.
 - **🧠 Bayesian-Smoothed Quality Scoring**: Filters out low-confidence places and balances Google ratings, review counts, user interest matching, and category diversity.
-- **💬 Interactive AI Chat Concierge**: Floating agent drawer with one-tap quick actions and free-form conversation to modify itineraries in real time.
+- **💬 Interactive Trip Concierge**: Floating chat assistant with quick-action shortcuts and natural language re-planning.
 - **🗺️ Interactive Dark Mode Map**: Custom Google Maps styling, numbered route pins, arrival/departure markers, interactive InfoWindows, and polyline route visualization.
-- **📍 Real-Time Autocomplete**: Debounced place and address autocomplete powered by Google Places API.
-- **📱 Responsive Design**: Seamless desktop dual-column layout (sticky map + scrollable timeline) that reflows gracefully on mobile screens.
+- **📱 Clean Production UI**: Focused, distraction-free interface with product-centered copy and streamlined timeline schedules.
 
 ---
 
@@ -324,10 +328,16 @@ Verifies backend status and API key configuration health.
 1. **Candidate Discovery**: Fetches diverse candidate venues across sightseeing, culture, nature, viewpoints, and dining within a realistic geographic radius using Google Places API (New).
 2. **Bayesian-Smoothed Ranking**: Evaluates candidates using a multi-objective scoring formula:
    $$\text{Score} = w_r \cdot \text{BayesianRating} + w_v \cdot \text{VibeMatch} + w_p \cdot \text{Proximity} - \text{CategoryPenalty}$$
-3. **Seeded Greedy Insertion**: Iteratively adds candidate stops that maximize value-to-detour ratio while ensuring return transit to the starting point remains strictly within the time limit.
-4. **2-Opt TSP Sequence Optimization**: Re-sequences stops to eliminate self-intersecting route legs, minimizing total driving/walking time.
-5. **Dwell Time & Meal Window Logic**: Custom visit durations based on venue category (e.g. 90-120 min for museums, 45-60 min for viewpoints, 60-75 min for meals) and slots meals cleanly between 12:00 PM–2:30 PM (lunch) or 6:30 PM–9:30 PM (dinner).
-6. **Safety Buffer**: Adds dynamic transit and dwell buffers (10–30 mins) based on route complexity to safeguard against real-world delays.
+3. **Marginal Value Greedy Insertion**: Iteratively adds candidate stops that maximize marginal value:
+   $$\text{MarginalValue} = \text{Quality} + \text{VibeMatch} + \text{LandmarkScore} + \text{Diversity} + \text{ItineraryValue} - \Delta\text{Travel} - \Delta\text{Time}$$
+   Ensures return transit to the starting point remains strictly within the time limit.
+4. **2-Opt TSP Sequence Optimization**: Re-sequences stops to eliminate self-intersecting route legs, minimizing total driving/walking time while respecting locked destination constraints.
+5. **Deterministic Meal Window Constraints**:
+   - **Breakfast**: `07:00 – 10:30` (ideal: `08:00 – 09:30`)
+   - **Lunch**: `11:30 – 15:00` (ideal: `12:15 – 01:30`)
+   - **Dinner**: `18:00 – 21:30` (ideal: `19:00 – 08:30`)
+   - Meal types are derived deterministically from the venue's actual arrival clock time. Food stops reached outside these windows (e.g. 16:00) receive `meal_type = None` and are never mislabeled. Dedicated restaurants that cannot fit a valid meal window are skipped rather than scheduled at invalid times.
+6. **Safety Buffer**: Adds dynamic transit and dwell buffers (10–45 mins) based on route complexity and transport mode to safeguard against real-world delays.
 
 ---
 
