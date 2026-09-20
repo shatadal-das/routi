@@ -138,13 +138,16 @@ Create a `.env` file in the `backend/` directory (you can copy `backend/.env.exa
 
 ```env
 GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
-GEMINI_API_KEY=your_gemini_api_key_here
+OPENAI_API_KEY=your_aws_bedrock_api_key_here
+OPENAI_BASE_URL=https://bedrock-runtime.../v1
 ```
 
 | Variable | Description |
 |---|---|
 | `GOOGLE_MAPS_API_KEY` | Google Maps API key with Places, Routes, and Geocoding enabled. |
-| `GEMINI_API_KEY` | Google Gemini API key for itinerary curation and conversational concierge. |
+| `OPENAI_API_KEY` | API key for AWS Bedrock OpenAI-compatible endpoint. |
+| `OPENAI_BASE_URL` | AWS Bedrock endpoint URL (for `google.gemma-3-27b-it` model). |
+
 
 ### 2. Frontend (`frontend/.env`)
 

@@ -80,13 +80,16 @@ class RouteRequest(BaseModel):
 @app.get("/api/health")
 def health_check():
     has_key = bool(os.getenv("GOOGLE_MAPS_API_KEY"))
-    has_gemini = bool(os.getenv("GEMINI_API_KEY"))
+    has_openai = bool(os.getenv("OPENAI_API_KEY"))
     return {
         "status": "ok",
         "message": "Backend is running",
         "google_maps_configured": has_key,
-        "gemini_configured": has_gemini
+        "openai_configured": has_openai,
+        "llm_configured": has_openai,
+        "gemini_configured": has_openai
     }
+
 
 
 class AgentChatRequest(BaseModel):
@@ -404,16 +407,35 @@ def process_trip_planning(request: RouteRequest):
         })
 
     agent_data = agent_plan if "agent_plan" in locals() and isinstance(agent_plan, dict) else {}
-    total_travel = agent_data.get("total_travel_mins", 0)
-    total_dwell = agent_data.get("total_dwell_mins", 0)
+    total_travel = agent_data.get("travel_minutes", agent_data.get("total_travel_mins", 0))
+    total_dwell = agent_data.get("visit_minutes", agent_data.get("total_dwell_mins", 0))
     safety_buffer = agent_data.get("safety_buffer_minutes") or agent_data.get("safety_buffer_mins") or calculate_safety_buffer_mins(total_travel)
-    total_duration = agent_data.get("total_trip_mins", total_travel + total_dwell)
-    total_duration_with_buffer = total_travel + total_dwell + safety_buffer
+    actual_elapsed = total_travel + total_dwell
+    planning_budget = actual_elapsed + safety_buffer
     available_time_mins = int(round(total_trip_hours * 60))
+    unused_mins = max(0, available_time_mins - planning_budget)
+    unused_available_mins = max(0, available_time_mins - actual_elapsed)
+    total_duration_with_buffer = planning_budget
     total_dist = agent_data.get("total_distance_km", 0.0)
     start_clock = agent_data.get("start_clock", start_clock_str if "start_clock_str" in locals() else "09:30 AM")
     end_clock = agent_data.get("end_clock", "")
+    buffered_end_clock = agent_data.get("buffered_end_clock", end_clock)
+    start_time = agent_data.get("start_time", start_clock)
+    actual_return_time = agent_data.get("actual_return_time", end_clock)
     rejected_destinations = agent_data.get("rejected_destinations", [])
+
+    time_accounting = {
+        "start_time": start_time,
+        "actual_return_time": actual_return_time,
+        "actual_elapsed_minutes": actual_elapsed,
+        "travel_minutes": total_travel,
+        "visit_minutes": total_dwell,
+        "safety_buffer_minutes": safety_buffer,
+        "planning_budget_minutes": planning_budget,
+        "available_minutes": available_time_mins,
+        "unused_minutes": unused_mins,
+        "unused_available_minutes": unused_available_mins
+    }
 
     # Construct the unified 'trip' contract representation
     trip_stops = [
@@ -441,16 +463,27 @@ def process_trip_planning(request: RouteRequest):
     route_coords = [{"lat": lat, "lng": lng}] + [{"lat": p["lat"], "lng": p["lng"]} for p in formatted_places] + [{"lat": lat, "lng": lng}]
 
     trip_contract = {
+        "start_time": start_time,
+        "actual_return_time": actual_return_time,
+        "actual_elapsed_minutes": actual_elapsed,
+        "travel_minutes": total_travel,
+        "visit_minutes": total_dwell,
+        "safety_buffer_minutes": safety_buffer,
+        "planning_budget_minutes": planning_budget,
+        "available_minutes": available_time_mins,
+        "unused_minutes": unused_mins,
+        "unused_available_minutes": unused_available_mins,
+        "time_accounting": time_accounting,
         "total_duration_minutes": total_duration_with_buffer,
         "travel_time_minutes": total_travel,
         "visit_time_minutes": total_dwell,
-        "safety_buffer_minutes": safety_buffer,
         "safety_buffer": safety_buffer,
         "available_time_minutes": available_time_mins,
         "distance_km": total_dist,
         "transport_mode": mode,
         "start_clock": start_clock,
         "end_clock": end_clock,
+        "buffered_end_clock": buffered_end_clock,
         "return_to_start": True,
         "stops": trip_stops,
         "route": route_coords,
@@ -467,6 +500,17 @@ def process_trip_planning(request: RouteRequest):
         "success": True,
         "status": "success",
         "trip": trip_contract,
+        "start_time": start_time,
+        "actual_return_time": actual_return_time,
+        "actual_elapsed_minutes": actual_elapsed,
+        "travel_minutes": total_travel,
+        "visit_minutes": total_dwell,
+        "safety_buffer_minutes": safety_buffer,
+        "planning_budget_minutes": planning_budget,
+        "available_minutes": available_time_mins,
+        "unused_minutes": unused_mins,
+        "unused_available_minutes": unused_available_mins,
+        "time_accounting": time_accounting,
         "message": "AI-curated route generated successfully",
         "curator_model": curator_model,
         "vibe": vibe_query,
@@ -490,9 +534,10 @@ def process_trip_planning(request: RouteRequest):
         "available_time_minutes": available_time_mins,
         "total_travel_mins": total_travel,
         "total_dwell_mins": total_dwell,
-        "slack_remaining_mins": agent_data.get("slack_remaining_mins", max(0, available_time_mins - total_duration_with_buffer)),
+        "slack_remaining_mins": agent_data.get("slack_remaining_mins", unused_mins),
         "start_clock": start_clock,
         "end_clock": end_clock,
+        "buffered_end_clock": buffered_end_clock,
         "rejected_destinations": rejected_destinations,
         "user_itinerary": agent_data.get("user_itinerary", {}),
         "polyline": polyline,

@@ -1,7 +1,7 @@
 """
 RoamAround / Routi - AI Agent & Tool Calling Engine
 
-Integrates Google Gemini (gemini-3.8-flash) as an autonomous travel concierge.
+Integrates OpenAI Python client (AWS Bedrock / google.gemma-3-27b-it) as an autonomous travel concierge.
 The agent uses tools (place scoring, loop optimization, timetable generation)
 to curate personalized itineraries with rich day-flow narratives.
 """
@@ -11,8 +11,12 @@ import json
 import re
 from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
-import google.generativeai as genai
 
+from services.llm_client import (
+    get_openai_client,
+    call_llm_json,
+    DEFAULT_MODEL
+)
 from services.scorer import score_and_rank_candidates, ScoringConfig
 from services.optimizer import optimize_day_itinerary, OptimizedItineraryPlan, calculate_safety_buffer_mins
 from services.itinerary_generator import generate_user_friendly_itinerary
@@ -20,38 +24,17 @@ from services.tools import search_places, get_place_details, get_route, optimize
 
 load_dotenv()
 
-API_KEY = os.getenv("GEMINI_API_KEY")
-if API_KEY:
-    try:
-        genai.configure(api_key=API_KEY, transport="rest")
-    except Exception as e:
-        print(f"Warning configuring Gemini in agent.py: {e}")
-
 
 class RoamAroundAgent:
     """
     Autonomous Concierge Agent that combines algorithmic optimization tools
-    with Gemini generative intelligence to produce personalized day trips.
+    with LLM generative intelligence (AWS Bedrock / google.gemma-3-27b-it) to produce personalized day trips.
     """
 
-    def __init__(self, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, model_name: str = DEFAULT_MODEL):
         self.model_name = model_name
-        self.fallback_models = ["gemini-flash-latest", "gemini-3.8-flash"]
-        self.model = None
-        self._init_model()
-
-    def _init_model(self):
-        if not os.getenv("GEMINI_API_KEY"):
-            return
-
-        models = [self.model_name] + self.fallback_models
-        for m in models:
-            try:
-                self.model = genai.GenerativeModel(m)
-                self.model_name = m
-                break
-            except Exception:
-                continue
+        self.client = get_openai_client()
+        self.model = self.client
 
     def plan_itinerary(
         self,
@@ -153,7 +136,8 @@ class RoamAroundAgent:
                 "destination": plan.return_leg.get("destination", origin_name),
                 "duration_minutes": plan.return_leg.get("duration_mins", 0),
                 "distance_km": plan.return_leg.get("distance_km", 0.0),
-                "arrival_clock": plan.return_leg.get("final_return_clock", plan.end_clock)
+                "arrival_clock": plan.return_leg.get("final_return_clock", plan.end_clock),
+                "buffered_arrival_clock": plan.return_leg.get("buffered_arrival_clock", getattr(plan, "buffered_end_clock", plan.end_clock))
             },
             "total_travel_time": plan.total_travel_mins,
             "travel_time_minutes": plan.total_travel_mins,
@@ -199,6 +183,29 @@ class RoamAroundAgent:
             "available_time_minutes": int(round(total_hours * 60)),
             "start_clock": plan.start_clock,
             "end_clock": plan.end_clock,
+            "buffered_end_clock": getattr(plan, "buffered_end_clock", plan.return_leg.get("buffered_arrival_clock", plan.end_clock)),
+            "start_time": plan.start_clock,
+            "actual_return_time": plan.end_clock,
+            "actual_elapsed_minutes": plan.total_travel_mins + plan.total_dwell_mins,
+            "travel_minutes": plan.total_travel_mins,
+            "visit_minutes": plan.total_dwell_mins,
+            "safety_buffer_minutes": actual_buffer,
+            "planning_budget_minutes": plan.total_travel_mins + plan.total_dwell_mins + actual_buffer,
+            "available_minutes": int(round(total_hours * 60)),
+            "unused_minutes": max(0, int(round(total_hours * 60)) - (plan.total_travel_mins + plan.total_dwell_mins + actual_buffer)),
+            "unused_available_minutes": max(0, int(round(total_hours * 60)) - (plan.total_travel_mins + plan.total_dwell_mins)),
+            "time_accounting": {
+                "start_time": plan.start_clock,
+                "actual_return_time": plan.end_clock,
+                "actual_elapsed_minutes": plan.total_travel_mins + plan.total_dwell_mins,
+                "travel_minutes": plan.total_travel_mins,
+                "visit_minutes": plan.total_dwell_mins,
+                "safety_buffer_minutes": actual_buffer,
+                "planning_budget_minutes": plan.total_travel_mins + plan.total_dwell_mins + actual_buffer,
+                "available_minutes": int(round(total_hours * 60)),
+                "unused_minutes": max(0, int(round(total_hours * 60)) - (plan.total_travel_mins + plan.total_dwell_mins + actual_buffer)),
+                "unused_available_minutes": max(0, int(round(total_hours * 60)) - (plan.total_travel_mins + plan.total_dwell_mins))
+            },
             "narrative": narrative,
             "user_itinerary": user_itinerary,
             "legs": plan.legs_data,
@@ -220,7 +227,7 @@ class RoamAroundAgent:
             optimizer_data=optimizer_output,
             user_preferences=user_preferences,
             transportation_mode=transportation_mode,
-            model=self.model
+            model=self.model_name
         )
 
 
@@ -233,8 +240,8 @@ class RoamAroundAgent:
         total_hours: float
     ) -> Tuple[str, Dict[str, Dict[str, str]]]:
         """
-        Prompts Gemini to generate a cohesive day-flow narrative and stop-by-stop rationales.
-        Falls back to deterministic text if Gemini fails.
+        Prompts LLM (AWS Bedrock / google.gemma-3-27b-it) to generate a cohesive day-flow narrative and stop-by-stop rationales.
+        Falls back to deterministic text if LLM fails or is unconfigured.
         """
         vibe_str = user_vibe or "Balanced sightseeing and local dining"
         stops_summary = [
@@ -256,7 +263,7 @@ class RoamAroundAgent:
             f"{len(plan.stops)} distinct stops and only {plan.total_travel_mins} minutes in transit."
         )
 
-        if not self.model:
+        if not self.client:
             return default_narrative, {}
 
         prompt = f"""You are RoamAround's AI concierge.
@@ -287,21 +294,16 @@ Return JSON with this schema:
 }}
 """
         try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config={"response_mime_type": "application/json"}
-            )
-            text = response.text.strip()
-            if text.startswith("```"):
-                text = re.sub(r"^```(?:json)?\s*", "", text)
-                text = re.sub(r"\s*```$", "", text)
-            data = json.loads(text)
-            narrative = data.get("narrative") or default_narrative
-            refinements = data.get("refinements") or {}
-            return narrative, refinements
-        except Exception as e:
-            print(f"Gemini agent narrative enrichment fallback ({e})")
+            data = call_llm_json(prompt=prompt, model=self.model_name, client=self.client)
+            if isinstance(data, dict):
+                narrative = data.get("narrative") or default_narrative
+                refinements = data.get("refinements") or {}
+                return narrative, refinements
             return default_narrative, {}
+        except Exception as e:
+            print(f"Agent narrative enrichment fallback ({e})")
+            return default_narrative, {}
+
 
     # -----------------------------------------------------------------------
     # Conversational Itinerary Modification Engine
@@ -461,8 +463,8 @@ Return JSON with this schema:
 
         summary = "; ".join(summary_actions) if summary_actions else "Refining itinerary based on your preferences"
 
-        # Optional Gemini structured refinement if configured
-        if self.model:
+        # Optional LLM structured refinement if configured
+        if self.client:
             try:
                 stops_context = [{"place_id": s.get("place_id"), "name": s.get("name"), "category": s.get("category")} for s in current_stops]
                 ai_prompt = f"""You are RoamAround's itinerary modification parser.
@@ -481,39 +483,33 @@ Extract structured modification intent matching this JSON schema:
   "summary": "1 sentence describing the change"
 }}
 """
-                res = self.model.generate_content(
-                    ai_prompt,
-                    generation_config={"response_mime_type": "application/json"}
-                )
-                ai_text = res.text.strip()
-                if ai_text.startswith("```"):
-                    ai_text = re.sub(r"^```(?:json)?\s*", "", ai_text)
-                    ai_text = re.sub(r"\s*```$", "", ai_text)
-                ai_data = json.loads(ai_text)
-                if ai_data.get("excluded_categories"):
-                    for c in ai_data["excluded_categories"]:
-                        if c.lower() not in excluded_categories:
-                            excluded_categories.append(c.lower())
-                if ai_data.get("excluded_place_ids"):
-                    for pid in ai_data["excluded_place_ids"]:
-                        if pid not in excluded_place_ids:
-                            excluded_place_ids.append(pid)
-                if ai_data.get("desired_categories"):
-                    for dc in ai_data["desired_categories"]:
-                        if dc.lower() not in desired_categories:
-                            desired_categories.append(dc.lower())
-                if ai_data.get("search_query"):
-                    search_query = ai_data["search_query"]
-                if ai_data.get("max_destinations") and not max_destinations:
-                    max_destinations = int(ai_data["max_destinations"])
-                if ai_data.get("time_adjustment") and not time_adjustment:
-                    time_adjustment = ai_data["time_adjustment"]
-                if ai_data.get("dwell_multiplier") and dwell_multiplier == 1.0:
-                    dwell_multiplier = float(ai_data["dwell_multiplier"])
-                if ai_data.get("summary"):
-                    summary = ai_data["summary"]
+                ai_data = call_llm_json(prompt=ai_prompt, model=self.model_name, client=self.client)
+                if isinstance(ai_data, dict):
+                    if ai_data.get("excluded_categories"):
+                        for c in ai_data["excluded_categories"]:
+                            if c.lower() not in excluded_categories:
+                                excluded_categories.append(c.lower())
+                    if ai_data.get("excluded_place_ids"):
+                        for pid in ai_data["excluded_place_ids"]:
+                            if pid not in excluded_place_ids:
+                                excluded_place_ids.append(pid)
+                    if ai_data.get("desired_categories"):
+                        for dc in ai_data["desired_categories"]:
+                            if dc.lower() not in desired_categories:
+                                desired_categories.append(dc.lower())
+                    if ai_data.get("search_query"):
+                        search_query = ai_data["search_query"]
+                    if ai_data.get("max_destinations") and not max_destinations:
+                        max_destinations = int(ai_data["max_destinations"])
+                    if ai_data.get("time_adjustment") and not time_adjustment:
+                        time_adjustment = ai_data["time_adjustment"]
+                    if ai_data.get("dwell_multiplier") and dwell_multiplier == 1.0:
+                        dwell_multiplier = float(ai_data["dwell_multiplier"])
+                    if ai_data.get("summary"):
+                        summary = ai_data["summary"]
             except Exception as e:
                 pass  # Fallback to robust deterministic rules
+
 
         return {
             "excluded_categories": excluded_categories,

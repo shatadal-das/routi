@@ -138,12 +138,32 @@ export default function Timeline({
   safetyBufferMins = 0,
   startClock = '09:30 AM',
   endClock = '',
+  bufferedEndClock = '',
+  timeAccounting = null,
   rejectedDestinations = [],
   narrative = '',
+  routeScore = null,
 }) {
-  const effectiveBufferMins = safetyBufferMins || 0;
-  const computedTotalMins = totalDurationMins || (totalTravelMins + totalDwellMins + effectiveBufferMins);
-  const formattedTotalDuration = formatMinutesToHours(computedTotalMins) || totalTripTime;
+  const tAct = timeAccounting || {};
+  const startTime = tAct.start_time || startClock || '09:30 AM';
+  const actualReturnTime = tAct.actual_return_time || endClock || '—';
+  const travelMins = tAct.travel_minutes ?? totalTravelMins;
+  const visitMins = tAct.visit_minutes ?? totalDwellMins;
+  const actualElapsedMins = tAct.actual_elapsed_minutes ?? (travelMins + visitMins);
+  const bufferMins = tAct.safety_buffer_minutes ?? (safetyBufferMins || 0);
+  const planningBudgetMins = tAct.planning_budget_minutes ?? (actualElapsedMins + bufferMins);
+  const availableMins = tAct.available_minutes ?? 0;
+  const unusedMins = tAct.unused_minutes ?? (availableMins > planningBudgetMins ? availableMins - planningBudgetMins : 0);
+  const unusedAvailableMins = tAct.unused_available_minutes ?? (availableMins > actualElapsedMins ? availableMins - actualElapsedMins : 0);
+  const windowStart = tAct.available_window_start || startTime;
+  const windowEnd = tAct.available_window_end || '';
+  const utilizationPct = availableMins > 0 ? Math.min(100, Math.round((planningBudgetMins / availableMins) * 1000) / 10) : 0;
+  const diningCount = places.filter((p) => p.is_meal_stop || p.type === 'restaurant' || !!p.meal_type).length;
+
+  const formattedActualElapsed = formatMinutesToHours(actualElapsedMins);
+  const formattedPlanningBudget = formatMinutesToHours(planningBudgetMins);
+  const formattedUnusedAvailable = formatMinutesToHours(unusedAvailableMins || unusedMins);
+  const formattedAvailableTotal = availableMins > 0 ? formatMinutesToHours(availableMins) : '';
   const [showRejected, setShowRejected] = useState(false);
   const startAddress = startLocation?.address || startLocation?.name || 'Starting Point';
 
@@ -201,14 +221,14 @@ export default function Timeline({
         )}
       </div>
 
-      {/* SUMMARY LEVEL (Strictly conforms to required specification) */}
-      <div className="mb-6 p-4 sm:p-5 rounded-2xl bg-slate-950/95 border border-slate-800 shadow-xl">
-        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center justify-between">
-          <span>Itinerary Summary</span>
-          <span className="text-indigo-400 font-semibold">Backend Optimizer Truth</span>
+      {/* SUMMARY LEVEL: Strict Separation of Timing Components (Backend Single Source of Truth) */}
+      <div className="mb-6 p-4 sm:p-5 rounded-2xl bg-slate-950/95 border border-slate-800 shadow-xl space-y-4">
+        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+          <span>Itinerary Time Accounting</span>
+          <span className="text-indigo-400 font-semibold">Backend Single Source of Truth</span>
         </div>
 
-        {/* Landmark Schedule Row */}
+        {/* Row 1: Primary Schedule Pillars */}
         <div className="grid grid-cols-3 gap-2 sm:gap-4 pb-3 border-b border-slate-800/80 text-center sm:text-left">
           <div>
             <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1">
@@ -216,61 +236,129 @@ export default function Timeline({
               <span>Start:</span>
             </div>
             <div className="text-sm sm:text-base font-extrabold text-white mt-0.5 font-mono">
-              {startClock || '09:30 AM'}
+              {startTime}
             </div>
           </div>
 
           <div>
-            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1">
+            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1" title="Physical arrival back at start: start_time + actual_elapsed_time">
               <span>🏁</span>
-              <span>Return:</span>
+              <span>Actual Return:</span>
             </div>
             <div className="text-sm sm:text-base font-extrabold text-emerald-400 mt-0.5 font-mono">
-              {endClock || '—'}
+              {actualReturnTime}
+            </div>
+            <div className="text-[10px] text-slate-500 font-sans mt-0.5 hidden sm:block">
+              Physical return
             </div>
           </div>
 
           <div>
-            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1">
+            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1" title="Sum of actual transit and visit dwell">
               <span>⏱️</span>
-              <span>Total:</span>
+              <span>Actual Elapsed:</span>
             </div>
-            <div className="text-sm sm:text-base font-extrabold text-indigo-300 mt-0.5 font-mono">
-              {formattedTotalDuration || '—'}
+            <div className="text-sm sm:text-base font-extrabold text-cyan-300 mt-0.5 font-mono">
+              {formattedActualElapsed}
+            </div>
+            <div className="text-[10px] text-slate-500 font-mono mt-0.5 hidden sm:block">
+              {actualElapsedMins}m on trip
             </div>
           </div>
         </div>
 
-        {/* Duration Breakdown Row (Safety buffer kept separate from activities) */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-4 pt-3 text-center sm:text-left">
+        {/* Row 2: Duration Components (Strictly Separated) */}
+        <div className="grid grid-cols-3 gap-2 sm:gap-4 pb-3 border-b border-slate-800/80 text-center sm:text-left">
           <div>
-            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1">
+            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1" title="Sum of all actual travel legs">
               <span>🚗</span>
               <span>Travel:</span>
             </div>
             <div className="text-sm sm:text-base font-bold text-slate-200 mt-0.5 font-mono">
-              {totalTravelMins}m
+              {travelMins}m
             </div>
           </div>
 
           <div>
-            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1">
+            <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1" title="Sum of all destination and meal visit durations">
               <span>📍</span>
               <span>Visits:</span>
             </div>
             <div className="text-sm sm:text-base font-bold text-slate-200 mt-0.5 font-mono">
-              {totalDwellMins}m
+              {visitMins}m
             </div>
           </div>
 
-          <div title="Reserved travel uncertainty margin; NOT counted as an activity">
+          <div title="Planning allowance for travel uncertainty; NOT counted as an activity">
             <div className="text-xs text-slate-400 font-medium flex items-center justify-center sm:justify-start space-x-1">
               <span>🛡</span>
-              <span>Safety buffer:</span>
+              <span>Safety Buffer:</span>
             </div>
             <div className="text-sm sm:text-base font-bold text-indigo-300 mt-0.5 font-mono">
-              {effectiveBufferMins}m
+              {bufferMins}m
             </div>
+          </div>
+        </div>
+
+        {/* Row 3: Planning Budget & Available Window Allocation */}
+        <div className="grid grid-cols-3 gap-2 sm:gap-4 pt-1 text-center sm:text-left text-xs">
+          <div>
+            <div className="text-slate-400 font-medium" title="actual_elapsed_time + safety_buffer">
+              Planning Budget:
+            </div>
+            <div className="text-xs sm:text-sm font-bold text-indigo-300 mt-0.5 font-mono">
+              {formattedPlanningBudget} <span className="text-[10px] text-slate-500">({planningBudgetMins}m)</span>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-slate-400 font-medium" title="User provided available exploration window">
+              Available Window:
+            </div>
+            <div className="text-xs sm:text-sm font-semibold text-slate-300 mt-0.5 font-mono">
+              {windowEnd ? `${startTime} – ${windowEnd}` : (formattedAvailableTotal || '—')}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-slate-400 font-medium" title="Unused remaining exploration time in window">
+              Unused Available:
+            </div>
+            <div className="text-xs sm:text-sm font-bold text-emerald-400 mt-0.5 font-mono">
+              {formattedUnusedAvailable}
+            </div>
+          </div>
+        </div>
+
+        {/* Row 4: Route Performance & Diagnostics */}
+        <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+          <div className="flex items-center space-x-2">
+            <span className="text-slate-400 font-medium">Time Utilization:</span>
+            <div className="flex items-center space-x-1.5">
+              <div className="w-16 sm:w-24 h-2 rounded-full bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 rounded-full transition-all duration-500"
+                  style={{ width: `${utilizationPct}%` }}
+                ></div>
+              </div>
+              <span className="font-extrabold text-emerald-400 font-mono text-xs">{utilizationPct}%</span>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2 text-[11px] font-medium text-slate-300">
+            <span className="bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800">
+              📍 <strong className="text-white">{places.length}</strong> {places.length === 1 ? 'Stop' : 'Stops'}
+            </span>
+            {diningCount > 0 && (
+              <span className="bg-amber-950/40 px-2 py-0.5 rounded-lg border border-amber-800/40 text-amber-300">
+                🍽️ <strong className="text-amber-200">{diningCount}</strong> {diningCount === 1 ? 'Dining stop' : 'Dining stops'}
+              </span>
+            )}
+            {routeScore !== null && routeScore !== undefined && (
+              <span className="bg-indigo-950/40 px-2 py-0.5 rounded-lg border border-indigo-800/40 text-indigo-300 font-mono">
+                ⭐ <strong className="text-indigo-200">{Number(routeScore).toFixed(1)}</strong> Score
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -471,7 +559,7 @@ export default function Timeline({
               const lastStop = places[places.length - 1];
               const returnTravelMins = returnLeg?.duration_mins || (returnLeg ? parseInt(returnLeg.duration_text) : 15);
               const returnDistanceText = returnLeg ? returnLeg.distance_text : '';
-              const returnTimeWindow = lastStop?.departure_time && endClock ? `${lastStop.departure_time}–${endClock}` : '';
+              const returnTimeWindow = lastStop?.departure_time && actualReturnTime && actualReturnTime !== '—' ? `${lastStop.departure_time}–${actualReturnTime}` : '';
 
               return (
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-slate-300 bg-slate-950/90 border border-slate-800/90 py-2 px-3.5 rounded-xl shadow-sm">
@@ -500,14 +588,16 @@ export default function Timeline({
           <div className="bg-slate-800/50 hover:bg-slate-800/80 border border-slate-700/60 rounded-2xl p-4 transition shadow-sm">
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5 font-mono">
-                <span>🏁 {endClock || 'Trip Return'} — Back at Start</span>
+                <span>🏁 {actualReturnTime} — Back at Start</span>
               </span>
               <span className="text-[10px] font-bold text-emerald-400/80 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
                 Round Trip Complete
               </span>
             </div>
             <h4 className="text-sm font-bold text-white">Return to {startAddress}</h4>
-            <p className="text-xs text-slate-400 mt-0.5">Safely concluded your trip on schedule.</p>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Concluded in {formattedActualElapsed} of actual travel & visits (safety buffer: {bufferMins}m).
+            </p>
           </div>
         </div>
 

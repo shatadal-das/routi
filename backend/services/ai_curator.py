@@ -3,36 +3,16 @@ import json
 import re
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
-import google.generativeai as genai
+from services.llm_client import call_llm_json, get_openai_client, DEFAULT_MODEL
 
 load_dotenv()
 
-# Configure Gemini API
-API_KEY = os.getenv("GEMINI_API_KEY")
-if API_KEY:
-    try:
-        genai.configure(api_key=API_KEY, transport="rest")
-    except Exception as e:
-        print(f"Warning configuring Gemini in ai_curator.py: {e}")
 
-
-def get_curator_model() -> genai.GenerativeModel:
+def get_curator_model():
     """
-    Instantiate gemini-3.8-flash model with fallback to other flash models if needed.
+    Returns configured OpenAI client instance if API key is present.
     """
-    primary_model = "gemini-2.5-flash"
-    fallback_models = ["gemini-flash-latest", "gemini-3.8-flash"]
-
-    try:
-        return genai.GenerativeModel(primary_model)
-    except Exception as e:
-        print(f"Warning: Primary model {primary_model} failed to instantiate: {e}")
-        for fb in fallback_models:
-            try:
-                return genai.GenerativeModel(fb)
-            except Exception:
-                continue
-        raise RuntimeError("No compatible Gemini Flash model could be initialized.")
+    return get_openai_client()
 
 
 def curate_itinerary(
@@ -40,10 +20,11 @@ def curate_itinerary(
     time_hours: float,
     vibe_preference: Optional[str] = None,
     price_level: Optional[str] = None,
+    model_name: str = DEFAULT_MODEL
 ) -> List[Dict[str, Any]]:
     """
-    Use Gemini (gemini-3.8-flash) to dynamically curate the best combination
-    of places and realistic visit durations based on user vibe and budget.
+    Uses the OpenAI Python client (AWS Bedrock / google.gemma-3-27b-it) to dynamically curate
+    the best combination of places and realistic visit durations based on user vibe and budget.
 
     Returns a list of dicts:
     [
@@ -57,6 +38,10 @@ def curate_itinerary(
     """
     if not places_list:
         return []
+
+    client = get_openai_client()
+    if not client:
+        return _fallback_curation(places_list, time_hours)
 
     vibe = vibe_preference.strip() if vibe_preference and vibe_preference.strip() else "Balanced sightseeing, scenic views, and popular local dining"
     budget = price_level.strip() if price_level and price_level.strip() else "Moderate / Flexible"
@@ -102,35 +87,18 @@ You must output a JSON array conforming to this schema:
 ]
 """
 
-    models_to_try = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.8-flash"]
     curated_data = None
-
-    for model_name in models_to_try:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(
-                prompt,
-                generation_config={"response_mime_type": "application/json"}
-            )
-
-            response_text = response.text.strip()
-            # Clean any accidental markdown code block formatting
-            if response_text.startswith("```"):
-                response_text = re.sub(r"^```(?:json)?\s*", "", response_text)
-                response_text = re.sub(r"\s*```$", "", response_text)
-
-            parsed = json.loads(response_text)
-            if isinstance(parsed, list) and len(parsed) > 0:
-                curated_data = parsed
-                print(f"Successfully curated itinerary with AI time estimation using {model_name}")
-                break
-        except Exception as e:
-            print(f"Model {model_name} attempt failed ({e}), trying fallback...")
-            continue
+    try:
+        parsed = call_llm_json(prompt=prompt, model=model_name, client=client)
+        if isinstance(parsed, list) and len(parsed) > 0:
+            curated_data = parsed
+            print(f"Successfully curated itinerary with AI time estimation using {model_name}")
+    except Exception as e:
+        print(f"LLM curation attempt failed ({e}), using dynamic heuristic fallback.")
 
     if not curated_data:
-        print("All Gemini models failed or rate limited. Using dynamic heuristic fallback.")
         return _fallback_curation(places_list, time_hours)
+
 
     # Validate entries
     valid_place_ids = {p.get("place_id") for p in places_list if p.get("place_id")}

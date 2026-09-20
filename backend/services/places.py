@@ -225,7 +225,8 @@ def fetch_places(
 def classify_place_category(types: List[str], name: str = "") -> tuple:
     """
     Returns (category, venue_type) ensuring cafes/bakeries are distinguished
-    from full sit-down dining restaurants.
+    from full sit-down dining restaurants and specific cultural/nature categories
+    are preserved rather than collapsed to generic attraction.
     """
     tl = [str(t).lower() for t in types]
     nl = str(name).lower()
@@ -236,14 +237,18 @@ def classify_place_category(types: List[str], name: str = "") -> tuple:
         return "restaurant", "restaurant"
     if any(t in tl for t in ["bar", "pub", "night_club"]):
         return "bar", "bar"
-    if any(t in tl for t in ["park", "campground", "national_park", "garden"]) or "park" in nl or "garden" in nl:
+    if any(t in tl for t in ["park", "campground", "national_park", "garden", "botanical_garden"]) or "park" in nl or "garden" in nl:
         return "park", "park"
-    if any(t in tl for t in ["museum", "art_gallery"]) or "museum" in nl or "gallery" in nl:
+    if any(t in tl for t in ["art_gallery"]) or "gallery" in nl:
+        return "art_gallery", "art_gallery"
+    if any(t in tl for t in ["museum"]) or "museum" in nl:
         return "museum", "museum"
-    if any(t in tl for t in ["viewpoint", "scenic_point"]) or "view" in nl or "overlook" in nl:
+    if any(t in tl for t in ["viewpoint", "scenic_point", "observation_deck"]) or "view" in nl or "overlook" in nl:
         return "viewpoint", "viewpoint"
     if any(t in tl for t in ["monument", "historical_landmark"]) or any(k in nl for k in ["fort", "palace", "monument", "tomb", "temple", "gate"]):
         return "monument", "monument"
+    if any(t in tl for t in ["shopping_mall", "market", "department_store"]) or "market" in nl or "bazaar" in nl:
+        return "shopping", "shopping"
     return "attraction", "attraction"
 
 
@@ -265,9 +270,11 @@ def fetch_candidate_places(
     max_candidates: int = 20,
 ) -> List[Dict[str, Any]]:
     """
-    Fetch up to max_candidates (default 20) diverse candidate places (attractions,
+    Fetch up to max_candidates diverse candidate places (attractions,
     parks, cultural sites, cafes, restaurants) around (lat, lng) with price levels
-    and ratings for Gemini AI curation.
+    and ratings for Gemini AI curation. For trips requesting > 20 candidates,
+    executes multi-query nearby searches across distinct type groups to bypass
+    Google's 20-place per-query response ceiling.
     """
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if not api_key:
@@ -281,6 +288,29 @@ def fetch_candidate_places(
         "X-Goog-Api-Key": api_key,
         "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.priceLevel",
     }
+
+    # Helper to parse and append places safely
+    def _ingest_places(place_items: List[Dict[str, Any]]):
+        for p in place_items:
+            pid = p.get("id")
+            if pid and pid not in seen_place_ids and "location" in p:
+                seen_place_ids.add(pid)
+                types = p.get("types", [])
+                name_text = p.get("displayName", {}).get("text", "Local Attraction")
+                cat, v_type = classify_place_category(types, name_text)
+                candidates.append({
+                    "place_id": pid,
+                    "name": name_text,
+                    "lat": p["location"]["latitude"],
+                    "lng": p["location"]["longitude"],
+                    "rating": p.get("rating", 4.3),
+                    "user_rating_count": p.get("userRatingCount", 150),
+                    "price_level": PRICE_LEVEL_MAP.get(p.get("priceLevel"), "$$ (Moderate)"),
+                    "types": types,
+                    "category": cat,
+                    "type": "restaurant" if cat == "restaurant" else ("cafe" if cat == "cafe" else "attraction"),
+                    "address": p.get("formattedAddress", "")
+                })
 
     # 1. If user provided a specific cuisine or keyword vibe, query searchText first
     search_query = cuisine or (vibe if vibe and len(vibe) < 50 else None)
@@ -299,33 +329,41 @@ def fetch_candidate_places(
         try:
             res = requests.post(search_text_url, json=payload, headers=headers, timeout=10)
             data = res.json()
-            for p in data.get("places", []):
-                pid = p.get("id")
-                if pid and pid not in seen_place_ids and "location" in p:
-                    seen_place_ids.add(pid)
-                    types = p.get("types", [])
-                    name_text = p.get("displayName", {}).get("text", "Local Venue")
-                    cat, v_type = classify_place_category(types, name_text)
-                    candidates.append({
-                        "place_id": pid,
-                        "name": name_text,
-                        "lat": p["location"]["latitude"],
-                        "lng": p["location"]["longitude"],
-                        "rating": p.get("rating", 4.2),
-                        "user_rating_count": p.get("userRatingCount", 150),
-                        "price_level": PRICE_LEVEL_MAP.get(p.get("priceLevel"), "$$ (Moderate)"),
-                        "types": types,
-                        "category": cat,
-                        "type": "restaurant" if cat == "restaurant" else ("cafe" if cat == "cafe" else "attraction"),
-                        "address": p.get("formattedAddress", "")
-                    })
+            _ingest_places(data.get("places", []))
         except Exception as e:
             print(f"Error fetching vibe/cuisine text candidates: {e}")
 
-    # 2. Query searchNearby for top cultural attractions & popular landmarks
+    # 2. Query searchNearby for top attractions, cultural landmarks & venues
     nearby_url = "https://places.googleapis.com/v1/places:searchNearby"
     needed = max_candidates - len(candidates)
-    if needed > 0:
+
+    if needed > 20:
+        # Multi-query strategy for longer trips (e.g. 8-12 hours requiring 25-35+ places)
+        # Query 2A: Sightseeing, culture, landmarks, galleries
+        query_groups = [
+            ["tourist_attraction", "museum", "art_gallery", "historical_landmark", "monument"],
+            ["park", "botanical_garden", "viewpoint", "cafe", "restaurant", "bakery"]
+        ]
+        for type_group in query_groups:
+            if len(candidates) >= max_candidates:
+                break
+            payload = {
+                "includedTypes": type_group,
+                "maxResultCount": 20,
+                "locationRestriction": {
+                    "circle": {
+                        "center": {"latitude": lat, "longitude": lng},
+                        "radius": radius,
+                    }
+                },
+            }
+            try:
+                res = requests.post(nearby_url, json=payload, headers=headers, timeout=10)
+                data = res.json()
+                _ingest_places(data.get("places", []))
+            except Exception as e:
+                print(f"Error in multi-query searchNearby: {e}")
+    elif needed > 0:
         nearby_payload = {
             "includedTypes": [
                 "tourist_attraction",
@@ -346,26 +384,7 @@ def fetch_candidate_places(
         try:
             res = requests.post(nearby_url, json=nearby_payload, headers=headers, timeout=10)
             data = res.json()
-            for p in data.get("places", []):
-                pid = p.get("id")
-                if pid and pid not in seen_place_ids and "location" in p:
-                    seen_place_ids.add(pid)
-                    types = p.get("types", [])
-                    name_text = p.get("displayName", {}).get("text", "Local Attraction")
-                    cat, v_type = classify_place_category(types, name_text)
-                    candidates.append({
-                        "place_id": pid,
-                        "name": name_text,
-                        "lat": p["location"]["latitude"],
-                        "lng": p["location"]["longitude"],
-                        "rating": p.get("rating", 4.3),
-                        "user_rating_count": p.get("userRatingCount", 150),
-                        "price_level": PRICE_LEVEL_MAP.get(p.get("priceLevel"), "$$ (Moderate)"),
-                        "types": types,
-                        "category": cat,
-                        "type": "restaurant" if cat == "restaurant" else ("cafe" if cat == "cafe" else "attraction"),
-                        "address": p.get("formattedAddress", "")
-                    })
+            _ingest_places(data.get("places", []))
         except Exception as e:
             print(f"Error fetching nearby candidate places: {e}")
 

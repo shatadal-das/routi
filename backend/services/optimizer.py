@@ -138,10 +138,40 @@ class OptimizedItineraryPlan:
     safety_buffer_mins: int = 0
     start_clock: str = "09:30 AM"
     end_clock: str = "05:30 PM"
+    buffered_end_clock: str = ""
+    start_time: str = "09:30 AM"
+    actual_return_time: str = "05:30 PM"
+    actual_elapsed_minutes: int = 0
+    travel_minutes: int = 0
+    visit_minutes: int = 0
+    planning_budget_minutes: int = 0
+    available_minutes: int = 0
+    unused_minutes: int = 0
+    time_accounting: Dict[str, Any] = field(default_factory=dict)
     return_leg: Dict[str, Any] = field(default_factory=dict)
     legs_data: List[Dict[str, Any]] = field(default_factory=list)
     route_score: float = 0.0
     rejected_destinations: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def actual_travel_time(self) -> int:
+        return self.total_travel_mins
+
+    @property
+    def actual_visit_time(self) -> int:
+        return self.total_dwell_mins
+
+    @property
+    def actual_elapsed_time(self) -> int:
+        return self.total_travel_mins + self.total_dwell_mins
+
+    @property
+    def safety_buffer(self) -> int:
+        return self.safety_buffer_mins
+
+    @property
+    def planning_budget(self) -> int:
+        return self.actual_elapsed_time + self.safety_buffer_mins
 
     @property
     def travel_time_minutes(self) -> int:
@@ -163,15 +193,16 @@ class OptimizedItineraryPlan:
 @dataclass
 class RouteScoringConfig:
     """Configuration weights and hyperparameters for holistic route-level scoring."""
-    weight_quality: float = 0.30
+    weight_quality: float = 0.25
     weight_preference: float = 0.20
-    weight_landmark: float = 0.20
-    weight_diversity: float = 0.15
+    weight_landmark: float = 0.15
+    weight_diversity: float = 0.10
     weight_completeness: float = 0.10
+    weight_utilization: float = 0.15
     weight_travel_cost: float = 0.05
     unused_time_penalty_per_hour: float = 1.5
     saturated_travel_mins: float = 120.0
-    target_stops_per_hour: float = 0.6
+    target_stops_per_hour: float = 0.65
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +349,7 @@ VISIT_DURATION_REGISTRY: Dict[str, CategoryVisitDuration] = {
     "lunch": CategoryVisitDuration("lunch", min_minutes=45, default_minutes=60, max_minutes=75, description="Midday lunch meal"),
     "dinner": CategoryVisitDuration("dinner", min_minutes=60, default_minutes=75, max_minutes=90, description="Evening dinner meal"),
     "cafe": CategoryVisitDuration("cafe", min_minutes=30, default_minutes=45, max_minutes=45, description="Artisan coffee or bakery pause"),
+    "afternoon_break": CategoryVisitDuration("afternoon_break", min_minutes=30, default_minutes=45, max_minutes=45, description="Afternoon cafe or tea pause"),
     "bakery": CategoryVisitDuration("bakery", min_minutes=30, default_minutes=45, max_minutes=45, description="Bakery or quick refreshment"),
     "park": CategoryVisitDuration("park", min_minutes=30, default_minutes=45, max_minutes=60, description="Public park or botanical garden"),
     "nature": CategoryVisitDuration("nature", min_minutes=30, default_minutes=45, max_minutes=60, description="Nature reserve or scenic green space"),
@@ -451,6 +483,16 @@ DEFAULT_MEAL_PERIODS: Dict[str, MealPeriod] = {
         min_dwell_mins=45,
         min_trip_overlap_mins=45
     ),
+    "afternoon_break": MealPeriod(
+        name="afternoon_break",
+        start_time="15:00",
+        end_time="17:30",
+        start_minute=15 * 60,        # 900
+        end_minute=17 * 60 + 30,     # 1050
+        default_dwell_mins=45,
+        min_dwell_mins=30,
+        min_trip_overlap_mins=30
+    ),
     "dinner": MealPeriod(
         name="dinner",
         start_time="18:00",
@@ -519,6 +561,19 @@ def is_restaurant_venue(place: Optional[Dict[str, Any]]) -> bool:
         # Disambiguate against attractions that mention bar/gate
         if not any(sc in cat for sc in ["museum", "park", "garden", "monument", "historic", "culture", "viewpoint"]):
             return True
+    return False
+
+
+def is_cafe_or_light_refreshment(place: Optional[Dict[str, Any]]) -> bool:
+    """Check if venue is an artisan cafe, bakery, coffee shop, or light refreshment venue."""
+    if not place or not isinstance(place, dict):
+        return False
+    cat = str(place.get("category") or place.get("type") or "").lower()
+    name = str(place.get("name") or "").lower()
+    types_raw = place.get("types")
+    types = [str(t).lower() for t in types_raw] if isinstance(types_raw, (list, tuple, set)) else []
+    if any(t in types for t in ["bakery", "cafe", "coffee_shop"]) or cat in ["cafe", "bakery"] or any(k in name for k in ["cafe", "coffee", "bakery", "tea", "bistro", "dessert", "patisserie", "gelato"]):
+        return True
     return False
 
 
@@ -729,8 +784,38 @@ def two_opt_optimize_loop(
 
 
 # ---------------------------------------------------------------------------
-# Complete Itinerary Holistic Route Evaluation
+# Complete Itinerary Holistic Route Evaluation & Time Utilization
 # ---------------------------------------------------------------------------
+
+def calculate_time_utilization_score(planned_mins: int, budget_mins: int) -> float:
+    """
+    Evaluates how effectively the itinerary utilizes the user's available duration.
+    Target utilization ranges:
+      - Short trips (<= 180 mins): 70% - 85%
+      - Medium trips (180 - 360 mins): 75% - 90%
+      - Long trips (> 360 mins): 80% - 92%
+    Returns score 0.0 - 100.0.
+    """
+    if budget_mins <= 0:
+        return 100.0
+    u = max(0.0, float(planned_mins) / float(budget_mins))
+    if u > 1.0:
+        return max(0.0, 100.0 - (u - 1.0) * 500.0)
+
+    if budget_mins <= 180:
+        u_min, u_max = 0.70, 0.85
+    elif budget_mins <= 360:
+        u_min, u_max = 0.75, 0.90
+    else:
+        u_min, u_max = 0.80, 0.92
+
+    if u_min <= u <= u_max:
+        return 100.0
+    elif u < u_min:
+        return round(100.0 * ((u / u_min) ** 1.1), 2)
+    else:
+        return round(100.0 - 40.0 * ((u - u_max) / max(0.01, 1.0 - u_max)), 2)
+
 
 def calculate_route_score(
     tour: List[Dict[str, Any]],
@@ -749,9 +834,9 @@ def calculate_route_score(
     3. Landmark value & tourism significance
     4. Category diversity across the route
     5. Itinerary completeness / pacing
-    6. Soft travel efficiency penalty (travel is a cost, not an overwhelming barrier)
-    7. Soft unused time penalty (unused time gently penalized, not forced)
-    8. Category repetition penalty (penalizes consecutive runs and excessive duplicates)
+    6. Time utilization objective (rewards meaningful utilization without filler)
+    7. Soft travel efficiency penalty
+    8. Category repetition penalty
     """
     if not tour:
         return 0.0
@@ -807,24 +892,24 @@ def calculate_route_score(
             repetition_penalty += 25.0
         for cat in distinct_cats:
             count = tour_cats.count(cat)
-            if count >= 3:
-                repetition_penalty += (count - 2) * 8.0
+            if count >= 4:
+                repetition_penalty += (count - 3) * 8.0
 
     # 5. Itinerary Completeness (0 - 100)
     budget_hours = max(1.0, total_budget_mins / 60.0)
-    target_stops = max(1, min(7, int(round(budget_hours * cfg.target_stops_per_hour))))
+    target_stops = max(1, min(12, int(round(budget_hours * cfg.target_stops_per_hour))))
     stop_ratio = min(1.0, n_stops / target_stops)
     completeness_score = stop_ratio * 100.0
 
-    # 6. Travel Efficiency (Soft cost, not an overwhelming penalty)
+    # 6. Time Utilization Score (0 - 100)
+    total_active_mins = total_travel_mins + total_visit_mins
+    buffer_mins = calculate_safety_buffer_mins(total_travel_mins)
+    planned_mins = total_active_mins + buffer_mins
+    utilization_score = calculate_time_utilization_score(planned_mins, total_budget_mins)
+
+    # 7. Travel Efficiency (Soft cost, not an overwhelming penalty)
     travel_ratio = min(1.0, total_travel_mins / max(30.0, cfg.saturated_travel_mins))
     travel_score = (1.0 - travel_ratio * 0.45) * 100.0
-
-    # 7. Soft Unused Time Penalty
-    total_active_mins = total_travel_mins + total_visit_mins
-    unused_mins = max(0, total_budget_mins - total_active_mins)
-    unused_hours = unused_mins / 60.0
-    unused_time_penalty = min(12.0, unused_hours * cfg.unused_time_penalty_per_hour)
 
     # Holistic Weighted Combination
     raw_score = (
@@ -833,8 +918,9 @@ def calculate_route_score(
         cfg.weight_landmark * composite_landmark +
         cfg.weight_diversity * diversity_score +
         cfg.weight_completeness * completeness_score +
+        cfg.weight_utilization * utilization_score +
         cfg.weight_travel_cost * travel_score
-    ) - repetition_penalty - unused_time_penalty
+    ) - repetition_penalty
 
     return round(max(5.0, min(100.0, raw_score)), 2)
 
@@ -1233,24 +1319,29 @@ class RouteOptimizer:
         all_candidates_food = bool(unique_candidates and all(is_food_candidate(c) for c in unique_candidates))
         allow_adjacent_food = bool(only_wants_food or all_candidates_food)
 
-        # Dynamic stop count targets based on available time
-        if total_budget_mins < 90:
-            max_stops = 1
-        elif total_budget_mins < 180:
-            max_stops = 2
-        elif total_budget_mins < 270:
+        # Safety upper bound stops: generous ceiling to prevent unbounded execution,
+        # not the primary stopping condition (marginal value and budget govern stopping).
+        # - 2h trip: up to 3 stops
+        # - 4h trip: up to 5 stops
+        # - 6h trip: up to 7 stops
+        # - 8h trip: up to 9 stops
+        # - 10h trip: up to 11 stops
+        # - 12h+ trip: up to 12 stops
+        if total_budget_mins <= 150:
             max_stops = 3
-        elif total_budget_mins < 390:
-            max_stops = 4
-        elif total_budget_mins < 510:
+        elif total_budget_mins <= 270:
             max_stops = 5
-        elif total_budget_mins < 630:
+        elif total_budget_mins <= 390:
             max_stops = 7
-        elif total_budget_mins < 750:
+        elif total_budget_mins <= 510:
             max_stops = 9
-        else:
+        elif total_budget_mins <= 630:
             max_stops = 11
+        else:
+            max_stops = 12
 
+        if explicit_category_set:
+            max_stops = max(max_stops, len(explicit_category_set))
         if max_destinations is not None and max_destinations > 0:
             max_stops = min(max_stops, int(max_destinations))
 
@@ -1384,6 +1475,85 @@ class RouteOptimizer:
             return tour_to_adjust
 
         # -------------------------------------------------------------------
+        # Marginal Value Objective:
+        # Marginal Value = Delta Value - (Delta Travel Cost + Delta Time Cost)
+        # Evaluates whether adding a destination is worth the additional time,
+        # balancing destination quality, landmark value, preference match, and
+        # category diversity against dynamic time scarcity.
+        # -------------------------------------------------------------------
+        def calculate_candidate_marginal_value(
+            cand_bd: PlaceScoreBreakdown,
+            raw_c: Dict[str, Any],
+            added_travel: int,
+            added_visit: int,
+            current_tour: List[Dict[str, Any]],
+            insert_pos: int,
+            remaining_budget_mins: int,
+            total_budget_mins: int,
+            user_interests: Optional[str] = None,
+            explicit_category_set: Optional[Set[str]] = None,
+            is_rest: bool = False,
+            is_food: bool = False
+        ) -> float:
+            c_canon = get_canonical_stop_category(raw_c)
+            tourism_sig = calculate_tourism_significance(raw_c)
+
+            # 1. Base Value: Quality, user preference match, and landmark significance
+            base_value = cand_bd.final_score * 0.65 + tourism_sig * 0.35
+
+            # 2. Diversity, Novelty & Harmony Bonuses / Penalties
+            diversity_adj = 0.0
+
+            # Soft penalty for placing the exact same canonical category consecutively
+            is_adj_same = False
+            if insert_pos > 0 and get_canonical_stop_category(current_tour[insert_pos - 1]) == c_canon:
+                is_adj_same = True
+            elif insert_pos < len(current_tour) and get_canonical_stop_category(current_tour[insert_pos]) == c_canon:
+                is_adj_same = True
+            if is_adj_same:
+                diversity_adj -= 10.0
+
+            # Novelty bonus vs Saturation penalty
+            prior_cat_count = sum(1 for p in current_tour if get_canonical_stop_category(p) == c_canon)
+            if prior_cat_count == 0:
+                diversity_adj += 12.0  # Novel category introduced
+            elif prior_cat_count == 1:
+                diversity_adj += 0.0
+            else:
+                diversity_adj -= 15.0 * (prior_cat_count - 1)  # Progressive saturation penalty
+
+            # Sequencing harmony
+            meal_harmony_adj = 0.0
+            if not is_food and insert_pos > 0 and is_food_candidate(current_tour[insert_pos - 1]):
+                meal_harmony_adj += 8.0  # Pleasant activity/stroll after dining
+            if is_rest:
+                meal_harmony_adj += 12.0  # Timely dining experience
+
+            # Explicit category match priority bonus
+            if explicit_category_set and c_canon in explicit_category_set:
+                if prior_cat_count == 0:
+                    meal_harmony_adj += 25.0
+
+            value_gain = base_value + diversity_adj + meal_harmony_adj
+
+            # 3. Dynamic Time Scarcity & Opportunity Cost
+            # base_time_rate: points per minute. For 120m ~ 0.54 pts/min; for 720m ~ 0.09 pts/min.
+            base_time_rate = 65.0 / max(120.0, float(total_budget_mins))
+
+            # scarcity_factor scales up as remaining available budget depletes
+            scarcity_factor = max(0.35, min(2.0, 200.0 / (max(1.0, float(remaining_budget_mins)) + 30.0)))
+
+            # Travel detour is pure friction/overhead (higher penalty weight)
+            travel_cost = float(added_travel) * 1.25 * base_time_rate * scarcity_factor
+
+            # Visit time is enjoyed destination activity (lower penalty weight)
+            visit_time_cost = float(added_visit) * 0.65 * base_time_rate * scarcity_factor
+
+            total_cost = travel_cost + visit_time_cost
+
+            return value_gain - total_cost
+
+        # -------------------------------------------------------------------
         # Candidate Tour Construction from Seed
         # -------------------------------------------------------------------
         def build_candidate_tour_from_seed(seed_bd: PlaceScoreBreakdown) -> List[Dict[str, Any]]:
@@ -1415,16 +1585,33 @@ class RouteOptimizer:
             if seed_entry.get("meal_type"):
                 claimed_meals.add(seed_entry["meal_type"])
 
-            # Greedy insertion loop
+            # Target maximum utilization ceiling to prevent overpacking / traveler rushing
+            target_util_ceiling = 0.88 if total_budget_mins <= 180 else (0.90 if total_budget_mins <= 360 else 0.92)
+
+            # Progressive Marginal-Value Route Insertion Loop
             while len(tour_seed) < max_stops:
+                current_span, current_travel, current_visit, _ = calculate_loop_metrics(tour_seed)
+                cur_buffer = calculate_safety_buffer_mins(current_travel)
+                remaining_budget = total_budget_mins - (current_span + cur_buffer)
+
+                if remaining_budget <= 20:
+                    break
+
+                # Stop if target utilization ceiling reached, unless explicit categories remain unfulfilled
+                if len(tour_seed) >= 2 and (current_span + cur_buffer) >= int(round(target_util_ceiling * total_budget_mins)):
+                    if not explicit_category_set or all(c in [get_canonical_stop_category(p) for p in tour_seed] for c in explicit_category_set):
+                        break
+
                 best_cand_entry = None
                 best_insert_pos = -1
-                best_efficiency = -1.0
-                current_span, current_travel, _, _ = calculate_loop_metrics(tour_seed)
+                best_marginal_value = -999.0
 
                 for cand_bd in reachable_candidates:
                     pid = cand_bd.place_id
                     if pid in selected_pids:
+                        continue
+                    # Quality gate: never add bad filler destinations merely to consume time
+                    if cand_bd.final_score < 40.0:
                         continue
                     raw_c = cand_map.get(pid)
                     if not raw_c:
@@ -1437,20 +1624,26 @@ class RouteOptimizer:
                     c_canon_cat = get_canonical_stop_category(raw_c)
                     is_rest = is_restaurant_venue(raw_c)
                     is_food = is_food_candidate(raw_c)
+                    is_c_cafe = is_cafe_or_light_refreshment(raw_c)
 
+                    # Meal constraints
                     if is_rest and not eligible_meal_periods and not allow_adjacent_food:
                         continue
                     if is_rest and not allow_adjacent_food and len(claimed_meals) >= len(eligible_meal_periods):
                         continue
-                    if is_rest and not allow_adjacent_food and total_budget_mins <= 360 and len(claimed_meals) >= 1:
+                    if is_rest and not allow_adjacent_food and total_budget_mins <= 360 and len(claimed_meals) >= 1 and not (total_budget_mins > 240 and is_c_cafe):
                         continue
-                    if not is_rest and not explicit_category_set and selected_cats.count(c_cat) >= 3:
+
+                    max_cat_limit = max(3, 2 + int(total_budget_mins / 240))
+                    if not is_rest and not explicit_category_set and selected_cats.count(c_cat) >= max_cat_limit:
                         continue
 
                     c_lat = raw_c["lat"]
                     c_lng = raw_c["lng"]
 
+                    # Multi-Position Route Insertion: evaluate all insertion points k in [0, len(tour_seed)]
                     for k in range(len(tour_seed) + 1):
+                        # Calculate arrival time at insertion index k
                         projected_elapsed = 0
                         p_prev_lat, p_prev_lng, p_prev_id = origin_lat, origin_lng, origin_id
                         for s_idx in range(k):
@@ -1476,6 +1669,8 @@ class RouteOptimizer:
                                 if mp.name in claimed_meals:
                                     continue
                                 if mp.start_minute <= arr_minute <= mp.end_minute:
+                                    if mp.name == "afternoon_break" and not is_c_cafe:
+                                        continue
                                     op_start, op_close = get_place_operating_window(raw_c)
                                     if op_start <= arr_minute and (arr_minute + mp.min_dwell_mins) <= op_close:
                                         matching_mp = mp
@@ -1484,7 +1679,10 @@ class RouteOptimizer:
                                 continue
                             c_dwell = matching_mp.default_dwell_mins
                         else:
+                            op_start, op_close = get_place_operating_window(raw_c)
                             c_dwell = determine_default_dwell_mins(raw_c)
+                            if not (op_start <= arr_minute and (arr_minute + min(30, c_dwell)) <= op_close):
+                                continue
 
                         trial_entry = dict(raw_c)
                         trial_entry["lat"] = c_lat
@@ -1500,6 +1698,7 @@ class RouteOptimizer:
 
                         trial_tour = tour_seed[:k] + [trial_entry] + tour_seed[k:]
 
+                        # Max 2 consecutive same-category constraint
                         if violates_consecutive_category_limit(trial_tour, max_consecutive=max_consecutive_same_category):
                             continue
 
@@ -1507,54 +1706,53 @@ class RouteOptimizer:
                         added_span = trial_span - current_span
                         trial_buffer = calculate_safety_buffer_mins(trial_travel)
 
-                        if (trial_span + trial_buffer) <= total_budget_mins and added_span > 0:
-                            if not tour_respects_meal_windows(trial_tour):
-                                continue
+                        # Strict planning budget feasibility
+                        if (trial_span + trial_buffer) > total_budget_mins or added_span <= 0:
+                            continue
 
-                            is_adjacent_same_cat = False
-                            if k > 0 and get_canonical_stop_category(tour_seed[k-1]) == c_canon_cat:
-                                is_adjacent_same_cat = True
-                            elif k < len(tour_seed) and get_canonical_stop_category(tour_seed[k]) == c_canon_cat:
-                                is_adjacent_same_cat = True
+                        if not tour_respects_meal_windows(trial_tour):
+                            continue
 
-                            soft_diversity_mult = 0.92 if is_adjacent_same_cat else 1.0
+                        added_travel = max(0, trial_travel - current_travel)
+                        added_visit = c_dwell
 
-                            prior_matches = sum(1 for sc in selected_cats if normalize_category(sc) == c_canon_cat)
-                            saturation_mult = (0.85 ** max(0, prior_matches - 1)) if prior_matches >= 2 else 1.0
+                        mv = calculate_candidate_marginal_value(
+                            cand_bd=cand_bd,
+                            raw_c=raw_c,
+                            added_travel=added_travel,
+                            added_visit=added_visit,
+                            current_tour=tour_seed,
+                            insert_pos=k,
+                            remaining_budget_mins=remaining_budget,
+                            total_budget_mins=total_budget_mins,
+                            user_interests=user_interests,
+                            explicit_category_set=explicit_category_set,
+                            is_rest=is_rest,
+                            is_food=is_food
+                        )
 
-                            post_meal_mult = 1.0
-                            if not is_food and k > 0 and is_food_candidate(tour_seed[k-1]):
-                                post_meal_mult = 1.35
+                        if mv > best_marginal_value:
+                            best_marginal_value = mv
+                            best_cand_entry = trial_entry
+                            best_insert_pos = k
 
-                            meal_timing_mult = 1.25 if is_rest else 1.0
-                            added_travel = max(1, trial_travel - current_travel)
-                            travel_detour_cost = max(3.0, float(added_travel))
-
-                            c_tourism_sig = calculate_tourism_significance(raw_c)
-                            cand_priority = cand_bd.final_score * 0.70 + c_tourism_sig * 0.30
-
-                            efficiency = (cand_priority * soft_diversity_mult * saturation_mult * meal_timing_mult * post_meal_mult) / travel_detour_cost
-                            if efficiency > best_efficiency or (abs(efficiency - best_efficiency) < 1e-6 and k > best_insert_pos):
-                                best_efficiency = efficiency
-                                best_cand_entry = trial_entry
-                                best_insert_pos = k
-
-                if best_cand_entry and best_insert_pos >= 0:
+                # Only commit insertion if candidate provides meaningful positive marginal value
+                if best_cand_entry and best_insert_pos >= 0 and best_marginal_value >= 5.0:
                     tour_seed.insert(best_insert_pos, best_cand_entry)
                     selected_pids.add(best_cand_entry["place_id"])
                     selected_geos.add((round(best_cand_entry["lat"], 4), round(best_cand_entry["lng"], 4)))
                     selected_cats.append(best_cand_entry["category"])
                     if best_cand_entry.get("matching_meal_period"):
                         claimed_meals.add(best_cand_entry["matching_meal_period"])
+
+                    # 2-Opt local search after each committed insertion to optimize sequence order
+                    tour_seed = two_opt_optimize_loop(
+                        tour_seed, origin_lat, origin_lng, mode, travel_matrix, origin_id,
+                        start_time_clock=start_time_clock, allow_adjacent_food=allow_adjacent_food,
+                        max_consecutive_same_category=max_consecutive_same_category
+                    )
                 else:
                     break
-
-            # 2-Opt local search
-            tour_seed = two_opt_optimize_loop(
-                tour_seed, origin_lat, origin_lng, mode, travel_matrix, origin_id,
-                start_time_clock=start_time_clock, allow_adjacent_food=allow_adjacent_food,
-                max_consecutive_same_category=max_consecutive_same_category
-            )
 
             # Meal pacing adjustment & anti-adjacency
             if len(tour_seed) >= 2 and not allow_adjacent_food:
@@ -1976,6 +2174,11 @@ class RouteOptimizer:
         current_dt += timedelta(minutes=return_mins)
         final_return_clock = current_dt.strftime("%I:%M %p")
 
+        total_span, total_travel, total_visit, total_dist = calculate_loop_metrics(tour)
+        buffer_mins = calculate_safety_buffer_mins(total_travel)
+        buffered_dt = current_dt + timedelta(minutes=buffer_mins)
+        buffered_return_clock = buffered_dt.strftime("%I:%M %p")
+
         return_leg_dict = {
             "destination": origin_name,
             "lat": origin_lat,
@@ -1984,7 +2187,8 @@ class RouteOptimizer:
             "duration_text": f"{return_mins} mins",
             "distance_km": return_km,
             "distance_text": f"{return_km:.1f} km",
-            "arrival_clock": final_return_clock
+            "arrival_clock": final_return_clock,
+            "buffered_arrival_clock": buffered_return_clock
         }
         legs_data.append({
             "leg_index": len(tour),
@@ -1996,7 +2200,6 @@ class RouteOptimizer:
             "distance_text": f"{return_km:.1f} km"
         })
 
-        total_span, total_travel, total_visit, total_dist = calculate_loop_metrics(tour)
         avg_score = round(route_score_accumulator / max(1, len(tour)), 1)
 
         # Step 9: Generate explainability reasons for unselected/rejected candidates
@@ -2048,23 +2251,55 @@ class RouteOptimizer:
             },
             "selected_destinations": selected_destinations_list,
             "ordered_itinerary": ordered_itinerary_list,
-            "rejected_destinations": rejected_destinations_list[:10],
+            "rejected_destinations": rejected_destinations_list,
             "return_to_start": return_leg_dict,
             "total_travel_time": total_travel,
             "travel_time_minutes": total_travel,
             "total_visit_time": total_visit,
             "visit_time_minutes": total_visit,
-            "safety_buffer": calculate_safety_buffer_mins(total_travel),
-            "safety_buffer_mins": calculate_safety_buffer_mins(total_travel),
-            "safety_buffer_minutes": calculate_safety_buffer_mins(total_travel),
+            "safety_buffer": buffer_mins,
+            "safety_buffer_mins": buffer_mins,
+            "safety_buffer_minutes": buffer_mins,
             "total_duration": total_span,
-            "total_duration_minutes": total_span + calculate_safety_buffer_mins(total_travel),
+            "total_active_minutes": total_span,
+            "total_duration_minutes": total_span + buffer_mins,
             "total_distance": total_dist,
             "score": best_route_score if best_route_score >= 0 else avg_score,
             "route_score": best_route_score if best_route_score >= 0 else avg_score,
             "average_destination_score": avg_score,
             "transportation_mode": mode,
             "available_time_minutes": available_time_minutes,
+            "start_clock": start_clock_str,
+            "end_clock": final_return_clock,
+            "estimated_return_clock": final_return_clock,
+            "buffered_return_clock": buffered_return_clock,
+            "buffered_end_clock": buffered_return_clock,
+            "start_time": start_clock_str,
+            "actual_return_time": final_return_clock,
+            "actual_elapsed_minutes": total_span,
+            "travel_minutes": total_travel,
+            "visit_minutes": total_visit,
+            "safety_buffer_minutes": buffer_mins,
+            "planning_budget_minutes": total_span + buffer_mins,
+            "available_minutes": available_time_minutes,
+            "unused_minutes": max(0, available_time_minutes - (total_span + buffer_mins)),
+            "unused_available_minutes": max(0, available_time_minutes - total_span),
+            "available_window_start": start_clock_str,
+            "available_window_end": (start_clock_dt + timedelta(minutes=available_time_minutes)).strftime("%I:%M %p"),
+            "time_accounting": {
+                "start_time": start_clock_str,
+                "actual_return_time": final_return_clock,
+                "actual_elapsed_minutes": total_span,
+                "travel_minutes": total_travel,
+                "visit_minutes": total_visit,
+                "safety_buffer_minutes": buffer_mins,
+                "planning_budget_minutes": total_span + buffer_mins,
+                "available_minutes": available_time_minutes,
+                "unused_minutes": max(0, available_time_minutes - (total_span + buffer_mins)),
+                "unused_available_minutes": max(0, available_time_minutes - total_span),
+                "available_window_start": start_clock_str,
+                "available_window_end": (start_clock_dt + timedelta(minutes=available_time_minutes)).strftime("%I:%M %p")
+            },
             "constraints_satisfied": {
                 "starts_at_origin": True,
                 "ends_at_origin": True,
@@ -2249,11 +2484,14 @@ def optimize_day_itinerary(
         "distance_text": ret_leg.get("distance_text", "0.0 km"),
         "destination": ret_leg.get("destination", origin_name),
         "final_return_clock": ret_leg.get("arrival_clock", start_time_clock),
-        "arrival_clock": ret_leg.get("arrival_clock", start_time_clock)
+        "arrival_clock": ret_leg.get("arrival_clock", start_time_clock),
+        "buffered_arrival_clock": ret_leg.get("buffered_arrival_clock", ret_leg.get("arrival_clock", start_time_clock))
     }
 
     total_span = raw_res.get("total_duration", 0)
-    slack = max(0, avail_mins - total_span)
+    buffer_mins = raw_res.get('safety_buffer_minutes', calculate_safety_buffer_mins(raw_res.get('total_travel_time', 0)))
+    total_planned = total_span + buffer_mins
+    slack = max(0, avail_mins - total_planned)
 
     return OptimizedItineraryPlan(
         start_location={"name": origin_name, "lat": origin_lat, "lng": origin_lng},
@@ -2264,9 +2502,19 @@ def optimize_day_itinerary(
         total_distance_km=raw_res.get("total_distance", 0.0),
         total_trip_hours=round(total_span / 60.0, 1),
         slack_remaining_mins=slack,
-        safety_buffer_mins=raw_res.get('safety_buffer_minutes', calculate_safety_buffer_mins(raw_res.get('total_travel_time', 0))),
+        safety_buffer_mins=buffer_mins,
         start_clock=start_time_clock,
         end_clock=ret_leg.get("arrival_clock", start_time_clock),
+        buffered_end_clock=raw_res.get("buffered_end_clock", ret_leg.get("buffered_arrival_clock", ret_leg.get("arrival_clock", start_time_clock))),
+        start_time=start_time_clock,
+        actual_return_time=ret_leg.get("arrival_clock", start_time_clock),
+        actual_elapsed_minutes=total_span,
+        travel_minutes=raw_res.get("total_travel_time", 0),
+        visit_minutes=raw_res.get("total_visit_time", 0),
+        planning_budget_minutes=total_planned,
+        available_minutes=avail_mins,
+        unused_minutes=slack,
+        time_accounting=raw_res.get("time_accounting", {}),
         return_leg=return_leg_data,
         legs_data=raw_res.get("legs", []),
         route_score=raw_res.get("score", 0.0),

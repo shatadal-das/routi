@@ -568,10 +568,10 @@ export default function SearchForm({
           {/* Dynamic Schedule Preview Badge */}
           <div className="mt-2 p-2 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] text-slate-400 flex items-center justify-between">
             <span>
-              Expected Return: <strong className="text-indigo-300 font-semibold">{calculateExpectedReturnClock(startHour, startMinute, startPeriod, timeHours)}</strong>
+              Available Window: <strong className="text-indigo-300 font-semibold">{getFormattedStartTime() ? `${getFormattedStartTime()} → ${calculateExpectedReturnClock(startHour, startMinute, startPeriod, timeHours)}` : 'Select start time'}</strong>
             </span>
             <span className="text-slate-500">
-              ({formatHoursDisplay(timeHours)} duration)
+              ({formatHoursDisplay(timeHours)} max window)
             </span>
           </div>
         </div>

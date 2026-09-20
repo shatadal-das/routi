@@ -16,7 +16,7 @@ const LOADING_MESSAGES = [
   },
   {
     title: 'AI is curating your vibe...',
-    subtitle: 'Gemini 3.8 Flash matching venues with your custom trip atmosphere',
+    subtitle: 'Gemma 3 27B matching venues with your custom trip atmosphere',
   },
   {
     title: 'Estimating realistic dwell times...',
@@ -132,7 +132,7 @@ function App() {
     }
   };
 
-  const places = routeResult?.optimized_places || [];
+  const places = routeResult?.optimized_places || routeResult?.trip?.stops || [];
   const legs = routeResult?.legs || [];
   const polyline = routeResult?.polyline || '';
   const totalTripTime = routeResult?.total_trip_time || '';
@@ -235,10 +235,13 @@ function App() {
                 totalDwellMins={routeResult?.visit_time_minutes ?? routeResult?.total_dwell_mins ?? 0}
                 slackRemainingMins={routeResult?.slack_remaining_mins}
                 safetyBufferMins={routeResult?.safety_buffer_minutes ?? routeResult?.safety_buffer_mins ?? routeResult?.safety_buffer ?? 0}
-                startClock={routeResult?.start_clock}
-                endClock={routeResult?.end_clock}
+                startClock={routeResult?.start_time || routeResult?.start_clock}
+                endClock={routeResult?.actual_return_time || routeResult?.end_clock}
+                bufferedEndClock={routeResult?.buffered_end_clock || routeResult?.trip?.buffered_end_clock}
+                timeAccounting={routeResult?.time_accounting || routeResult?.trip?.time_accounting}
                 rejectedDestinations={routeResult?.rejected_destinations}
                 narrative={routeResult?.narrative}
+                routeScore={routeResult?.route_score ?? routeResult?.score ?? routeResult?.trip?.score}
               />
             )}
           </div>

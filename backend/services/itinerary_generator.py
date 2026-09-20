@@ -25,10 +25,7 @@ import os
 import re
 import json
 from typing import Dict, Any, List, Optional
-from dotenv import load_dotenv
-import google.generativeai as genai
-
-load_dotenv()
+from services.llm_client import call_llm_json, get_openai_client, DEFAULT_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +68,7 @@ def generate_user_friendly_itinerary(
         optimizer_data: Structured output from optimize_route() or optimize_trip().
         user_preferences: Optional string of user interests (e.g. 'nature and good food').
         transportation_mode: DRIVE, WALK, or BICYCLE.
-        model: Optional configured genai.GenerativeModel instance.
+        model: Optional model name string (e.g. 'google.gemma-3-27b-it').
 
     Returns:
         Structured JSON dictionary containing all 10 required items.
@@ -138,12 +135,11 @@ def generate_user_friendly_itinerary(
     ai_preference_reasoning = default_preference_reasoning
     ai_stop_explanations = default_stop_explanations
 
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if gemini_key and (model or len(raw_stops) > 0):
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key and len(raw_stops) > 0:
         try:
-            if not model:
-                genai.configure(api_key=gemini_key, transport="rest")
-                model = genai.GenerativeModel("gemini-2.5-flash")
+            client = get_openai_client()
+            model_name = model if isinstance(model, str) and model else DEFAULT_MODEL
 
             stops_context = [
                 {
@@ -187,27 +183,20 @@ Respond in strict JSON with the following format:
   }}
 }}
 """
-            res = model.generate_content(
-                prompt,
-                generation_config={"response_mime_type": "application/json"}
-            )
-            raw_text = res.text.strip()
-            if raw_text.startswith("```"):
-                raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-                raw_text = re.sub(r"\s*```$", "", raw_text)
-
-            ai_parsed = json.loads(raw_text)
-            if ai_parsed.get("trip_title"):
-                ai_title = ai_parsed["trip_title"].strip()
-            if ai_parsed.get("preference_match_reasoning"):
-                ai_preference_reasoning = ai_parsed["preference_match_reasoning"].strip()
-            if isinstance(ai_parsed.get("stop_explanations"), dict):
-                for k, v in ai_parsed["stop_explanations"].items():
-                    if k in default_stop_explanations and v:
-                        ai_stop_explanations[k] = v.strip()
+            ai_parsed = call_llm_json(prompt=prompt, model=model_name, client=client)
+            if isinstance(ai_parsed, dict):
+                if ai_parsed.get("trip_title"):
+                    ai_title = ai_parsed["trip_title"].strip()
+                if ai_parsed.get("preference_match_reasoning"):
+                    ai_preference_reasoning = ai_parsed["preference_match_reasoning"].strip()
+                if isinstance(ai_parsed.get("stop_explanations"), dict):
+                    for k, v in ai_parsed["stop_explanations"].items():
+                        if k in default_stop_explanations and v:
+                            ai_stop_explanations[k] = str(v).strip()
         except Exception as e:
             # Safe fallback: if AI generation fails, default grounded copy is used
             print(f"Itinerary AI enrichment note ({e}), using deterministic grounded presentation.")
+
 
     # 5. Compile Final User-Friendly Destination List
     ordered_destinations = []
